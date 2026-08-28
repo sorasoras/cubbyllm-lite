@@ -14,7 +14,7 @@ fn = W.get_fn(mod, "gemm_i4")
 scale = torch.ones(1, device="cuda")
 E, N, K = 8, 2048, 768
 Kw = K // 8
-T = 256
+T = int(sys.argv[1]) if len(sys.argv) > 1 else 256
 torch.manual_seed(0)
 assign = torch.randint(0, E, (T,))
 order = torch.argsort(assign, stable=True)
