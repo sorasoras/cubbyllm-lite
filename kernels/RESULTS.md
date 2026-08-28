@@ -18,3 +18,20 @@ T=256/4096/16384.
   on RDNA4 is bandwidth/VRAM (4x weight compression), not MMA rate
   (no int4 WMMA advantage over int8 in ALU throughput; ISA-confirmed).
 - Launch overhead: 8 launches ~ 0.24ms; amortized at T>=4096.
+
+## K=32 iu4 WMMA variant (user-thesis confirmed)
+
+`__builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(int neg, v2i a, int neg, v2i b, v8i acc, int clamp)`
+— v2i = 2 packed ints = 16 int4 (K=32). Issue-rate duel: **2.29x the K=16
+variant** — RDNA4 does double per type-width; the K=16 path was half-rate.
+
+| Path (T=4096 grouped, E=8) | err | time | TFLOPS | vs fp32 |
+|---|---|---|---|---|
+| K=16 grouped MoE | 0.0 | 0.331 ms | 38.87 | 3.30x |
+| **K=32 grouped MoE** | **0.0** | **0.296 ms** | **43.47** | **3.38x** |
+| int8 _int_mm (reference) | — | 0.107 ms | 119.9 | 9.3x |
+| fp32 eager (reference) | — | 1.002 ms | 12.9 | 1x |
+
+K=32 dense standalone: exact, 34.9-35.7 TFLOPS. LDS bank-conflict padding
+ attempted, reverted (index slips under pressure) — documented as the next
+ optimization lever alongside multi-tile register blocking.
