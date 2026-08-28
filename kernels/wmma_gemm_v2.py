@@ -192,6 +192,8 @@ def pack_transposed(t):
 
 SHARED = 2 * 160 * 4
 def launch1(fn, grid, args_list, shared=SHARED):
+    torch.cuda.synchronize()   # torch streams are non-blocking: order our raw
+                               # launch after torch's pending writes to inputs
     storage = [ctypes.c_void_p(t.data_ptr()) if torch.is_tensor(t) else ctypes.c_int32(t)
                for t in args_list]
     ptrs = (ctypes.c_void_p * len(storage))(*[ctypes.cast(ctypes.byref(b), ctypes.c_void_p) for b in storage])
@@ -247,16 +249,27 @@ if __name__ == "__main__":
     Ap_t = pack(A_tok)
     Wp = pack(W).view(E * N, K // 8).contiguous()
     Out_m = torch.empty((M_pad, N), device="cuda", dtype=torch.float32)
+    host_m = np.empty(M_pad * N, dtype=np.float32)
     launch1(fn_moe, (N // 64, nblocks, 1),
             [Ap_t, Wp, blk_expert, blk_mbase, scale, Out_m, N, K // 8])
-    # reference: per block, expert weights x block rows
-    err_max = 0.0
-    for bi in range(nblocks):
-        eid = blk_expert[bi].item()
-        mb = blk_mbase[bi].item()
-        refb = A_tok[mb:mb+16].float() @ W[eid*N:(eid+1)*N].float().T
-        err_max = max(err_max, (Out_m[mb:mb+16] - refb).abs().max().item())
-    print(f"[grouped moe signed] max|err| = {err_max:.1f}  {'PASS' if err_max == 0 else 'FAIL'}", flush=True)
+    s_sync = HIP.hipDeviceSynchronize()
+    s_mem = HIP.hipMemcpy(host_m.ctypes.data_as(ctypes.c_void_p), ctypes.c_void_p(Out_m.data_ptr()),
+                          M_pad * N * 4, 2)
+    err_max = -1.0
+    if s_mem == 0:
+        Out_np = host_m.reshape(M_pad, N)
+        A_np = A_tok.cpu().numpy().astype(np.float32)
+        Wq = Wp.cpu().numpy().reshape(E * N, K // 8)
+        Wdeq = np.zeros((E * N, K), dtype=np.float32)
+        for i in range(8):
+            Wdeq[:, i::8] = ((Wq >> (4 * i)) & 0xF).astype(np.float32)
+        Wdeq = np.where(Wdeq > 7, Wdeq - 16, Wdeq)
+        for bi in range(nblocks):
+            eid = int(blk_expert.cpu().numpy()[bi]); mb = int(blk_mbase.cpu().numpy()[bi])
+            refb = A_np[mb:mb+16] @ Wdeq[eid*N:(eid+1)*N].T
+            err_max = max(err_max, np.abs(Out_np[mb:mb+16] - refb).max())
+    print(f"[grouped moe signed] sync={s_sync} memcpy={s_mem}  max|err| = {err_max:.1f}  "
+          f"{'PASS' if err_max == 0 else 'FAIL'}", flush=True)
 
     # ---- benchmark ----
     print("\n=== benchmark: M=4096, K=768, N=2048 (16.8 GFLOP) ===", flush=True)
