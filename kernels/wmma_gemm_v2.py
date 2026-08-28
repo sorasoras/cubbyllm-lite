@@ -220,7 +220,7 @@ if __name__ == "__main__":
     B = torch.randint(-8, 8, (N, K), device="cuda", dtype=torch.int32)
     Ap, Bt = pack(A), pack_transposed(B)
     Out = torch.empty((M, N), device="cuda", dtype=torch.float32)
-    launch1(fn_gemm, (N // 64, M // 16, 1), [Ap, Bt, scale, Out, M, N, K])
+    launch1(fn_gemm, (N // 64, M // 16, 1), [Ap, Bt, scale, Out, M, N, K // 8])
     ref = A.float() @ B.float().T
     e = (Out - ref).abs().max().item()
     print(f"[dense v2 signed] max|err| = {e:.1f}  {'PASS' if e == 0 else 'FAIL'}", flush=True)
@@ -248,7 +248,7 @@ if __name__ == "__main__":
     Wp = pack(W).view(E * N, K // 8).contiguous()
     Out_m = torch.empty((M_pad, N), device="cuda", dtype=torch.float32)
     launch1(fn_moe, (N // 64, nblocks, 1),
-            [Ap_t, Wp, blk_expert, blk_mbase, scale, Out_m, N, K])
+            [Ap_t, Wp, blk_expert, blk_mbase, scale, Out_m, N, K // 8])
     # reference: per block, expert weights x block rows
     err_max = 0.0
     for bi in range(nblocks):
@@ -269,7 +269,7 @@ if __name__ == "__main__":
     Apb, Btb = pack(Ab.to(torch.int32)), pack_transposed(Bb.to(torch.int32))
     Outb = torch.empty((Mb, N), device="cuda", dtype=torch.float32)
     t_i4 = bench(lambda: launch1(fn_gemm, (N // 64, Mb // 16, 1),
-                                 [Apb, Btb, scale, Outb, Mb, N, K]))
+                                 [Apb, Btb, scale, Outb, Mb, N, K // 8]))
     print(f"fp32 eager : {t_fp32:7.3f} ms  {gflop/t_fp32:6.1f} TFLOPS")
     print(f"int8 _int_mm: {t_i8:6.3f} ms  {gflop/t_i8:6.1f} TFLOPS")
     print(f"int4 WMMA v2: {t_i4:7.3f} ms  {gflop/t_i4:6.1f} TFLOPS")
