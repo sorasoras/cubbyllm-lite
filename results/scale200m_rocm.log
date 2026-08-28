@@ -1,0 +1,12 @@
+model 214.9M params on cuda (d=768, hid=2048, 8+1 experts, 7 blocks)
+uniform CE = 5.545
+gen    0  ce 7.904  (init 4s)
+gen   10  ce 5.627  ppl   277.9  bal 0.08/0.25  (91s, 8.4s/gen)
+gen   20  ce 5.544  ppl   255.6  bal 0.08/0.25  (176s, 9.1s/gen)
+gen   30  ce 5.539  ppl   254.4  bal 0.08/0.25  (264s, 8.5s/gen)
+gen   40  ce 5.604  ppl   271.5  bal 0.08/0.25  (352s, 9.0s/gen)
+gen   50  ce 5.583  ppl   266.0  bal 0.08/0.25  (439s, 8.9s/gen)
+gen   60  ce 5.568  ppl   261.8  bal 0.08/0.25  (527s, 8.7s/gen)
+gen   70  ce 5.590  ppl   267.7  bal 0.08/0.25  (610s, 8.4s/gen)
+gen   80  ce 5.595  ppl   269.0  bal 0.08/0.25  (695s, 8.7s/gen)
+DONE tag=200M-rocm params=214.9M gens=80 total=695s
