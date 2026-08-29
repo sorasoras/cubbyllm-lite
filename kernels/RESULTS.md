@@ -445,3 +445,34 @@ Reaching higher requires a hand-written GCN assembly kernel with manual
 register allocation + waitcnt placement (multi-week effort), or AMD
 exposing async-copy/cluster features to hiprtc. All 15 kernel variants,
 probe harnesses, ISA dumps and the full evidence chain are committed.
+
+## Round 6: inline-asm hand-scheduling attack (v16) — state at close
+Built v16: chunk body as volatile inline asm (6x ds_load_2addr_b64 with
+immediate offsets, one s_wait_dscnt, 16 WMMAs) to force load batching.
+Real GFX12 discoveries en route (all probe-verified, reusable):
+1. ds_load_2addr_b64 offset fields are in **8-BYTE (b64) GRANULES**, not
+   bytes (offset1:2 = +16 B). Verified by LDS-ramp probe.
+2. Raw ds addresses are absolute LDS offsets — the __shared__ array base
+   is LDS 0, but region bases (A end/B start at 128*AST) and the
+   double-buffer base (buf*BUFSZ) must be folded into the address regs.
+3. gfx1201 splits legacy s_waitcnt: LDS waits are s_wait_dscnt N.
+4. llvm-objdump flags: --disassemble-all --arch-name=amdgcn --mcpu=gfx1201
+   (llvm-mc stdin-hex is broken in ROCm SDK 23).
+
+Verification state: fragment loads verified EXACT for all 8 warps and all
+12 fragments (probe_geom.py, asm vs C++ on ramp LDS); single-warp chunk
+math verified EXACT (verify_v16_chunk.py after fixing 3 probe-rig bugs:
+output stride, Bw[n,w] staging transpose, phantom n-tiles for N=16).
+Full 8-warp block probe (verify_v16_block.py) still FAILS with float-bit
+garbage (0x7F.. patterns) in acc for mband/nband subsets — signature of a
+register aliasing / spill interaction specific to the composed
+6-v4i-outputs + 8-v8i-acc body that the isolated pieces do not show.
+Next debugging step: dump per-lane acc from the failing block probe and
+compare against the warp-0-only result; suspect the asm-output v4i
+register allocation colliding with acc under -O3 (try naming fixed
+registers or reducing to 4 asm loads + 2 C++ loads).
+
+Full kernel v16 (K=64 single chunk): err 1000, rows 0-63 (warp pairs
+0-1, 2-3) wrong, rows 64-127 (warps 4-7) exact — deterministic,
+mband-correlated, NOT a permutation of correct output.
+Champion remains v15: 250.6 TFLOPS (37.8%), exact.
