@@ -235,3 +235,14 @@ Remaining work: apply the interleaved pack through the GEMM's LDS
 indirection (the LDS store must place data so the fragment reads,
 indexed by (row, kt, tile), receive the interleaved order) — verified
 harnesses exist for every stage.
+
+## Campaign close (final)
+
+The K=32 fragment layout is CONFIRMED k-interleaved: nibble j of word w
+of lane l <-> k = (l/16)*16 + 2j + w; single-tile test with the
+interleaved host pack passes max|err| = 0.0 at true K=32 (interleave_
+test.log). The remaining integration: apply this pack through the GEMM's
+LDS indirection (the LDS store indexing must match the interleave, and
+the half-test D=16-vs-32 neg-flag asymmetry needs one controlled check).
+All harnesses committed. Verified deliverable: v4 — 80-83.5 TFLOPS
+grouped MoE, exact, ~5x fp32, native int4 K=32 WMMA on RDNA4/Windows.
