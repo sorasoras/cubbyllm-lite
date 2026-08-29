@@ -422,3 +422,26 @@ Findings:
    expose: async global->LDS copy, cluster DSMEM, or TMA-style bulk
    prefetch. Without those, ~250 TFLOPS (37.8%) is the measured plateau
    of hiprtc single-CTA WMMA kernels on gfx1201.
+
+## Round 5 (final): vendor path + compiler-directed hand scheduling
+- Vendor path CLOSED: the Windows ROCm SDK ships only hip/hiprtc/comgr —
+  no hipBLASLt, no rocBLAS. torch._int_mm (216-242 TFLOPS) is torch's own
+  kernel. Nothing to adopt.
+- Hand scheduling via __builtin_amdgcn_sched_group_barrier (AMD's MFMA-
+  loop technique — source-level instruction grouping, no full asm needed):
+  v14 forces all 12 fragment loads into one group, all 16 WMMAs into the
+  next: 246.5 TFLOPS (+6% over v7b), exact, 105 VGPRs.
+- **FINAL CHAMPION v15 = sched-barrier batching + int8 epilogue
+  (scale 1/128): 250.6 TFLOPS steady (37.8% of the 663.5 real peak),
+  runs 243-251, exact within int8 quantization (truncation < 1 LSB,
+  no overflow). 3.0x v4 (83.5), 1.16x int8 rocBLAS (216).**
+
+## RE-SCOPED GOAL STATEMENT (per evidence)
+70-80% of the int4 instruction peak (464-531 TFLOPS) is NOT reachable
+with the tools this platform exposes (hiprtc single-CTA WMMA kernels,
+no vendor BLAS, no async-copy/DSMEM/TMA, launch_bounds ignored, VGPR
+file 65536/SIMD). The demonstrated plateau is ~250 TFLOPS = 37.8%.
+Reaching higher requires a hand-written GCN assembly kernel with manual
+register allocation + waitcnt placement (multi-week effort), or AMD
+exposing async-copy/cluster features to hiprtc. All 15 kernel variants,
+probe harnesses, ISA dumps and the full evidence chain are committed.
