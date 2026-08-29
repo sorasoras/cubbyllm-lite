@@ -679,3 +679,12 @@ CONCLUSION: every hiprtc-expressible structure on gfx1201 plateaus at
 final deliverable. The 2.03x gap to 80% requires capabilities outside
 this toolchain (async-copy/DSMEM/TMA, or a different hardware
 generation).
+
+## RUN-BOOK (champion)
+    # K=4096 compute-bound benchmark + correctness (T=16384, E=8, N=2048):
+    B:/git/rocm-venv/Scripts/python.exe kernels/gemm_v19.py 16384 4096
+    # Realistic MoE shape (K=768): 205.1 TFLOPS
+    B:/git/rocm-venv/Scripts/python.exe kernels/gemm_v19.py 16384 768
+    # Verify: "max|err| = 1.0 (fp-boundary int8 truncation class)"; int8
+    # outputs scaled by 1/128 (per-tensor scale, quantized hand-off).
+    # Optimal launch: P=84 (3 CTAs/CU x 28 CUs), block 32x16, 18.4? -> see SHARED in file.
