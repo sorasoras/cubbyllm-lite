@@ -109,3 +109,25 @@ its 2.29x "issue rate" advantage is instruction-issue efficiency, NOT
 
 This resolves the 2484/3308/3578 fault family and the int4-vs-int8
 throughput question definitively.
+
+## Per-nibble probe: ROOT CAUSE found — VOP3P packed-half fragments
+
+Per-nibble probes (single nibble=1, k-ramp counterparts) reveal:
+- Only nibble j=0 of each fragment word has a visible effect; nibbles
+  j>=1 map OUTSIDE the consumed range.
+- k-coverage per lane is tiny (observed k=1,2,18 for the first two
+  words), n/m mappings scrambled vs any linear hypothesis.
+- All-ones count (16 per (m,n)) + j0-only liveness = **VOP3P packed-half
+  semantics**: the WMMA builtins process v2i/v8i registers as paired
+  16-bit halves (each half = 4xint4); a fragment filled with plain
+  byte-ordered nibbles only populates the LOW halves -> the instruction
+  consumes 16 of the named 32 k.
+
+Conclusion: exploiting the full K=32 int4 path on RDNA4 via RTC requires
+fragments packed in the VOP3P half-interleaved layout (lo/hi 16-bit
+halves, each holding 4 int4 with the documented lane map). That is a
+solvable, well-defined follow-up (the probe harness in nibble_probe.py
+can verify any candidate layout in minutes). Until then, the int4
+effective MMA rate on RDNA4 is ~int8 rate (~332 TOPS), and v4
+(80-83.5 TFLOPS exact, ~5x fp32, 52% of int8) is at ~25% of the true
+VOP3P-corrected peak — consistent with a first-generation kernel.
