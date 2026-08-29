@@ -726,3 +726,16 @@ before the signal. The split-barrier cross-wave ordering semantics on
 RDNA4 are NOT the CDNA ones and remain UNDECODED (operands likely differ:
 count/ID fields). probe_namedbarrier.py is committed as the resume
 instrument — decode against the GFX12 ISA doc, then build v24.
+
+## BARRIER SEMANTICS DECODED (operand matrix probe, probe_barrier_matrix.py)
+gfx1201 split-barrier findings (2-warp LDS ordering test, 60 combos):
+- ORDERED: s_barrier_signal -1 + s_barrier_wait -1  (Out[1]=42) — the
+  cross-wave, LDS-ordered full barrier. No init/join needed.
+- UNORDERED: wait 0/1/2 (with or without init 2/4) — including the
+  wait-0 form the __syncthreads lowering emits (its correctness there
+  must rely on surrounding waitcnt state, not the barrier itself).
+USEFULNESS: the ordered form is __syncthreads-equivalent (whole-CTA) —
+it does NOT yet give the producer/consumer SUBSET sync v24 needs. The
+remaining question: whether s_barrier_join <id> selects independent
+barrier subsets (matrix rows for init/join still to run — probe
+script supports them). v24 viable only if join-IDs give split groups.
