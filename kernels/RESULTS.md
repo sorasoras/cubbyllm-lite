@@ -538,3 +538,20 @@ Reusable assets: probe harnesses, ISA disasm flow, GFX12 asm recipes
 (b64-granule ds offsets, raw-address region/buffer bases, s_wait_dscnt,
 asm-output composition limits), all committed.
 Champion while the effort runs: v15 = 252.5 TFLOPS (38.1%), exact.
+
+## Milestone 1 progress (pinned/clobber chunk body): loads isolated as the defect
+verify_pinned2.py: chunk body as ONE asm block, ALL pinned VGPRs as pure
+clobbers (accs v32-95 zeroed in-asm, B frags v96-111, A frags as pinned
+input scalars v112-119), results stored to LDS scratch in-asm. Compiles
+and runs (no fault — the clobber bookkeeping SOLVED the earlier crash).
+Correctness still FAIL (err 510/538) with a DECISIVE diagnostic: D is
+bit-identical across two different host-side B stagings => the in-asm
+ds_load_2addr_b64 reads are hitting unstaged LDS, i.e. the address
+registers (%0-%3) are not reaching the loads correctly in this operand
+configuration (suspect: "v"-constrained address inputs clobbered by the
+in-asm v_mov zeroing of v32-95 — the zeroing lines run BEFORE the loads
+and the compiler may have allocated the address inputs in that range).
+Next step: pin the 4 address inputs to specific registers OUTSIDE
+v32-111 (e.g. via register uint aB0r asm("v20")) or move the zeroing
+AFTER the loads/wmmas (zero-on-first-use via ds_stores is unnecessary —
+zero the accs with 64 v_mov AFTER the loads + wait).
