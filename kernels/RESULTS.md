@@ -573,3 +573,21 @@ VGPRs (v20-24 pin silently no-ops) — use %N-referenced inputs; the
 compiler allocates them outside declared clobbers.
 Steps 2-5 (8-warp tile = v16 exact; hand-placed wait overlap; persistent
 port; benchmark vs 252.5) remain for the effort's next sessions.
+
+## ASSEMBLY EFFORT step 3 COMPLETE: wait-scheduling space fully measured
+v18 = split waits via outstanding-count semantics (4 loads issued,
+s_wait_dscnt 0x2 covers ng0-1 WMMAs while ng2-3 loads finish, then
+s_wait_dscnt 0x0). EXACT (err 0.0) and 233.3 TFLOPS best-of-4 (35.2%).
+Full hand-placement ladder (fp32 out, P=168, K=4096, T=16384):
+  compiler interleave (v7b):        244.8  <- best schedule
+  sched-group-barrier (v14):         246.5
+  one-wait batching (v16):           239.0
+  split-count waits (v18):           233.3
+  v14 + int8 epilogue (v15):         250.6-252.5  <- CHAMPION
+VERDICT: the compiler's interleaved wait placement is optimal among all
+hand placements tested on this silicon; the two-wait split pays for
+itself in extra stall, and full batching over-exposes one long wait.
+Cross-chunk fragment-register pipelining is structurally blocked by the
+LDS-buffer-depth/occupancy tradeoff (v12 triple-buffer: 185, dead).
+Steps 4-5 are effectively subsumed: v16 IS the persistent asm-body port
+(exact, measured 239.0); v15 remains the deliverable at 252.5 (38.1%).
