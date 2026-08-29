@@ -391,3 +391,34 @@ K=4096 T=16384, exact, 1.07x the int8 rocBLAS rate.
   (37.8%), runs 242-250, max quantization err 1/128 — NEW CHAMPION.**
   Halves the fp32 write path; outputs are int8 activations ready for the
   next quantized layer (the cubbylite pipeline use case).
+
+## Round 4: ISA disassembly (llvm-objdump, ROCm SDK 23.0 LLVM — found in
+## _rocm_sdk_core/lib/llvm/bin; llvm-mc stdin-hex is broken, use
+## llvm-objdump --disassemble-all --arch-name=amdgcn --mcpu=gfx1201)
+
+v7b/v13 per-chunk body (K=4096, 16 WMMA/lane):
+  16 v_wmma_i32_16x16x32_iu4 (acc in-place, 8 independent chains)
+   6 ds_load_2addr_b64  (compiler FUSED pairs; 12 b64 = all A+B frags)
+   6 s_wait_dscnt       (stall points: ~30-cyc LDS latency exposed
+                         after only 4-8 WMMA issue slots)
+  45 s_wait_alu + 37 s_delay_alu (SALU address-chain dep stalls, mostly
+                         epilogue + load lambdas)
+   4 ds_store_b64 + 4 global_load_b32 + 2 global_load_b64 (prefetch)
+   64 global_store_b32 (epilogue), 3 barrier pairs
+
+Findings:
+1. The compiler ALREADY hoists/fuses loads optimally: v13 (source-level
+   load hoisting) compiles to IDENTICAL ISA (103 VGPRs, same waits).
+   Local scheduling is not the gap.
+2. VGPR file = 65536/SIMD: v7b's 103 regs allow 19.9 waves/SIMD (2 CTAs
+   of 8); a 4m x 4n warp tile needs 128 acc + ~35 working = 163+ regs ->
+   6 waves -> the measured 197. The 127-reg 2-CTA budget cannot fit
+   128 acc regs + any working set. Triad confirmed at ISA level.
+3. Stall mechanism: the per-chunk barrier PHASE-LOCKS all warps, so when
+   each hits its s_wait_dscnt the whole SIMD waits together. Fewer
+   barriers (KCW=16) costs LDS residency; private-per-warp B costs 8x
+   L2 traffic; both measured dead.
+4. Real remaining fixes need hardware paths RDNA4/hiprtc does not
+   expose: async global->LDS copy, cluster DSMEM, or TMA-style bulk
+   prefetch. Without those, ~250 TFLOPS (37.8%) is the measured plateau
+   of hiprtc single-CTA WMMA kernels on gfx1201.
