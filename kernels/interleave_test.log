@@ -1,0 +1,1 @@
+interleave hypothesis (k = block*16 + 2j + w): max|err| = 0.0  PASS

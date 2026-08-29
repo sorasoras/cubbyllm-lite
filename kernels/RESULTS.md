@@ -223,3 +223,15 @@ reads them as REDUNDANT copies of 16 k. The fix: deduplicate — load
 each 16-k chunk once per (lane-group, k-block) and use the builtin's
 packed-pair accumulate, OR simply use the verified v4 (which is
 semantically correct as a K=16-equivalent at half rate).
+
+## K=32 FRAGMENT LAYOUT CONFIRMED: k-interleaved (single-tile PASS)
+
+Decisive experiment: packing the operands with nibble j of word w of
+lane l ↔ k = (l/16)*16 + 2j + w gives max|err| = 0.0 on the single-tile
+K=32 test (interleave_test.log). The fragment layout is k-INTERLEAVED
+(even k in the lo word, odd k in the hi word of each v2i), not
+contiguous — this is the root cause of every v5b correctness failure.
+Remaining work: apply the interleaved pack through the GEMM's LDS
+indirection (the LDS store must place data so the fragment reads,
+indexed by (row, kt, tile), receive the interleaved order) — verified
+harnesses exist for every stage.
