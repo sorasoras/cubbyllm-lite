@@ -1,3 +1,16 @@
+# INT4xINT4 MoE on RDNA4 (gfx1201) — FINAL STATUS (campaign closed)
+
+**DELIVERABLE: gemm_v19.py — 261.4 TFLOPS @ K=4096, T=16384 (39.4% of the
+confirmed-real 663.5 TOPS int4 peak), 205.1 TFLOPS @ K=768. Quantization-
+exact (int8 truncation < 1 LSB), int8 activations out. 3.13x the campaign
+start (v4: 83.5), 1.21x int8 rocBLAS. Persistent single launch, 256x128
+tiles, 16 warps, KCW=4, P=84 (wave-quantization optimum).**
+
+The 80%-of-peak target is measured-unreachable on gfx1201/hiprtc: 23
+variants all plateau ~260 TFLOPS; every structural lever closed by
+measurement (details below); the 2.03x gap requires async-copy/DSMEM/TMA-
+class mechanisms this platform does not expose. User-authorized close.
+
 # INT4xINT4 MoE kernel (RDNA4 / gfx1201) — measured results
 
 Native int4 WMMA (`wmma_i32_16x16x16_iu4_w32_gfx12`), hiprtc-compiled,
