@@ -1,0 +1,70 @@
+  B lane 0 w0: j0:n0,k2,0 | j7:None
+  B lane 0 w1: j0:n0,k1,0 | j7:None
+  B lane 1 w0: j0:n1,k2,0 | j7:None
+  B lane 1 w1: j0:n1,k1,0 | j7:None
+  B lane 2 w0: j0:n2,k2,0 | j7:None
+  B lane 2 w1: j0:n2,k1,0 | j7:None
+  B lane 3 w0: j0:n3,k2,0 | j7:None
+  B lane 3 w1: j0:n3,k1,0 | j7:None
+  B lane 4 w0: j0:n4,k2,0 | j7:None
+  B lane 4 w1: j0:n4,k1,0 | j7:None
+  B lane 5 w0: j0:n5,k2,0 | j7:None
+  B lane 5 w1: j0:n5,k1,0 | j7:None
+  B lane 6 w0: j0:n6,k2,0 | j7:None
+  B lane 6 w1: j0:n6,k1,0 | j7:None
+  B lane 7 w0: j0:n7,k2,0 | j7:None
+  B lane 7 w1: j0:n7,k1,0 | j7:None
+  B lane 8 w0: j0:n8,k2,0 | j7:None
+  B lane 8 w1: j0:n8,k1,0 | j7:None
+  B lane 9 w0: j0:n9,k2,0 | j7:None
+  B lane 9 w1: j0:n9,k1,0 | j7:None
+  B lane10 w0: j0:n10,k2,0 | j7:None
+  B lane10 w1: j0:n10,k1,0 | j7:None
+  B lane11 w0: j0:n11,k2,0 | j7:None
+  B lane11 w1: j0:n11,k1,0 | j7:None
+  B lane12 w0: j0:n12,k2,0 | j7:None
+  B lane12 w1: j0:n12,k1,0 | j7:None
+  B lane13 w0: j0:n13,k2,0 | j7:None
+  B lane13 w1: j0:n13,k1,0 | j7:None
+  B lane14 w0: j0:n14,k2,0 | j7:None
+  B lane14 w1: j0:n14,k1,0 | j7:None
+  B lane15 w0: j0:n15,k2,0 | j7:None
+  B lane15 w1: j0:n15,k1,0 | j7:None
+  B lane16 w0: j0:n0,k2,0 | j7:None
+  B lane16 w1: j0:n0,k1,0 | j7:None
+  B lane17 w0: j0:n1,k2,0 | j7:None
+  B lane17 w1: j0:n1,k1,0 | j7:None
+  B lane18 w0: j0:n2,k2,0 | j7:None
+  B lane18 w1: j0:n2,k1,0 | j7:None
+  B lane19 w0: j0:n3,k2,0 | j7:None
+  B lane19 w1: j0:n3,k1,0 | j7:None
+  B lane20 w0: j0:n4,k2,0 | j7:None
+  B lane20 w1: j0:n4,k1,0 | j7:None
+  B lane21 w0: j0:n5,k2,0 | j7:None
+  B lane21 w1: j0:n5,k1,0 | j7:None
+  B lane22 w0: j0:n6,k2,0 | j7:None
+  B lane22 w1: j0:n6,k1,0 | j7:None
+  B lane23 w0: j0:n7,k2,0 | j7:None
+  B lane23 w1: j0:n7,k1,0 | j7:None
+  B lane24 w0: j0:n8,k2,0 | j7:None
+  B lane24 w1: j0:n8,k1,0 | j7:None
+  B lane25 w0: j0:n9,k2,0 | j7:None
+  B lane25 w1: j0:n9,k1,0 | j7:None
+  B lane26 w0: j0:n10,k2,0 | j7:None
+  B lane26 w1: j0:n10,k1,0 | j7:None
+  B lane27 w0: j0:n11,k2,0 | j7:None
+  B lane27 w1: j0:n11,k1,0 | j7:None
+  B lane28 w0: j0:n12,k2,0 | j7:None
+  B lane28 w1: j0:n12,k1,0 | j7:None
+  B lane29 w0: j0:n13,k2,0 | j7:None
+  B lane29 w1: j0:n13,k1,0 | j7:None
+  B lane30 w0: j0:n14,k2,0 | j7:None
+  B lane30 w1: j0:n14,k1,0 | j7:None
+  B lane31 w0: j0:n15,k2,0 | j7:None
+  B lane31 w1: j0:n15,k1,0 | j7:None
+  A lane 0 w0: j0:m0,k1,0 | j7:None
+  A lane 0 w1: j0:m0,k1,0 | j7:None
+  A lane 1 w0: j0:m1,k1,0 | j7:None
+  A lane 1 w1: j0:m1,k1,0 | j7:None
+  A lane 2 w0: j0:m2,k1,0 | j7:None
+  A lane 2 w1: j0:m2,k1,0 | j7:None
