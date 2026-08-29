@@ -184,3 +184,18 @@ k-interleaved order BEFORE the LDS stage (or loading with a de-interleave
 in the fragment read). Full lane0-1 sweep data: nibbleprobe_lane01.log.
 Next session: extend the sweep to all 32 lanes, derive the complete
 host-layout -> fragment transform, rebuild the packer, verify, benchmark.
+
+## Probe interpretation correction (P1-P5 re-analysis)
+
+P1's D[m][0] = 2m+1 pattern proves STANDARD WMMA CROSS-LANE semantics:
+the A operand is wave-distributed over k (lane l holds A nibbles at
+k ~= 2l, 2l+1 via its v2i), and the hardware internally pairs A-lane-j
+data with B-lane-l data for lane l's D column. My earlier per-lane
+fragment hypotheses were confounded by this. The complete decode needs:
+full 32-lane nibble sweep (nibble_probe.py now extended) with full
+16x16 D readback per probe, solving the linear system offline for the
+true (lane, word, nibble) -> (operand, k, m-or-n) map. The transform is
+mechanical; the analysis (a small linear-system solve per operand) is
+the remaining work. NOTE: this only matters for extracting MORE than
+the currently-achieved throughput — the K=16-equivalent usage (v4) is
+semantically correct as-is and delivers 80-83.5 TFLOPS exact.

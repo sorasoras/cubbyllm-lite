@@ -71,7 +71,7 @@ def set_nibble(frag, l, w, j):
 # --- B sweep: for each (lane 0-1, word 0-1, nibble 0-7), with A = ramps ---
 print("B-nibble mapping (lane, word, nib) -> (n, k_lo, k_hi):", flush=True)
 b_map = {}
-for l in range(2):
+for l in range(32):
     for w in range(2):
         for j in range(8):
             bf = set_nibble(zero_frag(), l, w, j)
@@ -88,18 +88,18 @@ for l in range(2):
             else:
                 b_map[(l, w, j)] = None
 # compact print: lane0 only + dedupe
-for l in range(2):
+for l in range(32):
     for w in range(2):
         cells = []
         for j in range(8):
             m = b_map[(l, w, j)]
             cells.append(f"j{j}:n{m[0]},k{m[1] if m[1] is not None else '?'},{m[2]}" if m else f"j{j}:None")
-        print(f"  B lane{l} w{w}: " + " | ".join(cells), flush=True)
+        print(f"  B lane{l:2d} w{w}: " + " | ".join(cells), flush=True)
 
 # --- A sweep: for each (lane 0-1, word 0-1, nibble 0-7), with B = ramps ---
 print("A-nibble mapping (lane, word, nib) -> (m, k_lo, k_hi):", flush=True)
 a_map = {}
-for l in range(2):
+for l in range(32):
     for w in range(2):
         for j in range(8):
             af = set_nibble(zero_frag(), l, w, j)
@@ -113,10 +113,10 @@ for l in range(2):
                 a_map[(l, w, j)] = (r, klo, khi - 1)
             else:
                 a_map[(l, w, j)] = None
-for l in range(2):
+for l in range(32):
     for w in range(2):
         cells = []
         for j in range(8):
             m = a_map[(l, w, j)]
             cells.append(f"j{j}:m{m[0]},k{m[1] if m[1] is not None else '?'},{m[2]}" if m else f"j{j}:None")
-        print(f"  A lane{l} w{w}: " + " | ".join(cells), flush=True)
+        print(f"  A lane{l:2d} w{w}: " + " | ".join(cells), flush=True)
