@@ -650,3 +650,19 @@ exceeds the compute time at K=4096). Sequential-pass 256x256 with
 LDS-resident A: dead (A must reload per pass -> AI collapses to 341,
 measured-family trap).
 FINAL: v19 = 261.4 TFLOPS (39.4%), 205.1 at K=768. Gap to 80% = 2.03x.
+
+## ROUND 12: v23 (v22 + 2m x 4n) — third blocking loss; plateau CONFIRMED
+v23 = v22's 256x256/32-warp geometry with 32x64 warp tiles (per-warp
+loads 6/chunk vs 9, predicted LDS 75% of VALU). Quantization-exact;
+P-sweep peak 237.9 (35.9%) — BELOW v22 (260.5) and v19 (261.4).
+Third independent measurement of the same pattern (v21 on v19: 251.7,
+v23 on v22: 237.9): warp-level register blocking consistently LOSES
+8-10% on gfx1201 despite LDS-traffic models predicting wins — the
+doubled A reads, extra addressing, and reduced ILP cost more than the
+B-read savings, every time. Wait-placement space: already saturated
+(v16/v18 vs compiler, measured).
+CONCLUSION: every hiprtc-expressible structure on gfx1201 plateaus at
+~260 TFLOPS (39.4% of the real 663.5 TOPS peak). v19 stands as the
+final deliverable. The 2.03x gap to 80% requires capabilities outside
+this toolchain (async-copy/DSMEM/TMA, or a different hardware
+generation).
