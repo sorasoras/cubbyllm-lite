@@ -555,3 +555,21 @@ Next step: pin the 4 address inputs to specific registers OUTSIDE
 v32-111 (e.g. via register uint aB0r asm("v20")) or move the zeroing
 AFTER the loads/wmmas (zero-on-first-use via ds_stores is unnecessary —
 zero the accs with 64 v_mov AFTER the loads + wait).
+
+## MILESTONE 1 GREEN: single-warp pinned/asm chunk body EXACT (err=0)
+verify_pinned2.py PASSES (call0 err=0, call1 err=0). Resolution chain:
+1. The +v-binding crash -> fixed by pure-clobber bookkeeping (in-asm
+   zeroing + LDS scratch) and, finally, by the v16-proven composition
+   (4 asm ds_load_2addr_b64 with +v v4i outputs, one s_wait_dscnt, WMMA
+   builtins on C++ accs).
+2. The constant-D paradox -> the asm loads were CORRECT; the probe's
+   B staging was flat-indexing garbage (Bw[nl*8+2p] on a (64,8) packer
+   output). Correct fragment words: Bfrag[w, n] = sum_j B[8w+j, n]<<4j.
+3. The last FAIL -> the REFERENCE split D-rows by kt-group; the WMMA
+   layout gives every D row the FULL-K dot across both lane groups.
+   Brute-force match proved D0[0] = An[0,:64] @ Btrue (141, 78, ...).
+Register-var pinning finding: clang IGNORES local register asm vars for
+VGPRs (v20-24 pin silently no-ops) — use %N-referenced inputs; the
+compiler allocates them outside declared clobbers.
+Steps 2-5 (8-warp tile = v16 exact; hand-placed wait overlap; persistent
+port; benchmark vs 252.5) remain for the effort's next sessions.

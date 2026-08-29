@@ -12,44 +12,13 @@ HIP.hipMemcpy.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, cty
 #   accs v32-95 (8 x v8i), B frags v96-111, A frags via pinned input scalars
 #   v112-119, addresses as %0-%3, scratch base %4.
 # Zero + compute + store-to-LDS-scratch all inside the asm block.
-lines = []
-lines.append('"v_mov_b32 v32, 0\\n\\t" "v_mov_b32 v33, 0\\n\\t" "v_mov_b32 v34, 0\\n\\t" "v_mov_b32 v35, 0\\n\\t"')
-lines.append('"v_mov_b32 v36, 0\\n\\t" "v_mov_b32 v37, 0\\n\\t" "v_mov_b32 v38, 0\\n\\t" "v_mov_b32 v39, 0\\n\\t"')
-for base in range(40, 96, 4):
-    lines.append('"v_mov_b32 v' + str(base) + ', 0\\n\\t" "v_mov_b32 v' + str(base+1) + ', 0\\n\\t" "v_mov_b32 v' + str(base+2) + ', 0\\n\\t" "v_mov_b32 v' + str(base+3) + ', 0\\n\\t"')
-zero = "\n\t".join(lines)
-
-w = []
-# loads: fB0=fB(kt,ng0,1) v96-99; fB1 (kt,ng2,3) v100-103; fB2 (kt+2,ng0,1) v104-107; fB3 v108-111
-w.append('"ds_load_2addr_b64 v[96:99], %0 offset0:0 offset1:16\\n\\t"')
-w.append('"ds_load_2addr_b64 v[100:103], %1 offset0:0 offset1:16\\n\\t"')
-w.append('"ds_load_2addr_b64 v[104:107], %2 offset0:0 offset1:16\\n\\t"')
-w.append('"ds_load_2addr_b64 v[108:111], %3 offset0:0 offset1:16\\n\\t"')
-w.append('"s_wait_dscnt 0x0\\n\\t"')
-# call0: A mg0 = v[112:113], A mg1 = v[116:117]; B pair-row kt: ng0 v[96:97], ng1 v[98:99], ng2 v[100:101], ng3 v[102:103]
-for ng, bb in [(0, "v[96:97]"), (1, "v[98:99]"), (2, "v[100:101]"), (3, "v[102:103]")]:
-    a0 = 32 + ng * 8
-    a1 = 64 + ng * 8
-    w.append(f'"v_wmma_i32_16x16x32_iu4 v[{a0}:{a0+7}], v[112:113], {bb}, v[{a0}:{a0+7}] neg_lo:[1,1,0]\\n\\t"')
-    w.append(f'"v_wmma_i32_16x16x32_iu4 v[{a1}:{a1+7}], v[116:117], {bb}, v[{a1}:{a1+7}] neg_lo:[1,1,0]\\n\\t"')
-# call1: A mg0 = v[114:115], A mg1 = v[118:119]; B pair-row kt+2: ng0 v[104:105], ng1 v[106:107], ng2 v[108:109], ng3 v[110:111]
-for ng, bb in [(0, "v[104:105]"), (1, "v[106:107]"), (2, "v[108:109]"), (3, "v[110:111]")]:
-    a0 = 32 + ng * 8
-    a1 = 64 + ng * 8
-    w.append(f'"v_wmma_i32_16x16x32_iu4 v[{a0}:{a0+7}], v[114:115], {bb}, v[{a0}:{a0+7}] neg_lo:[1,1,0]\\n\\t"')
-    w.append(f'"v_wmma_i32_16x16x32_iu4 v[{a1}:{a1+7}], v[118:119], {bb}, v[{a1}:{a1+7}] neg_lo:[1,1,0]\\n\\t"')
-# store accs to scratch: 8 accs x 4 b64 = 32 stores, offsets 0..255 bytes from %4
-st = []
-for acc in range(8):
-    r0 = 32 + acc * 8
-    for q in range(4):
-        st.append(f'"ds_store_b64 %4, v[{r0+2*q}:{r0+2*q+1}] offset:{acc*32 + q*8}\\n\\t"')
-body = "\n\t".join(lines) + "\n\t" + "\n\t".join(w) + "\n\t" + "\n\t".join(st)
-clob = ", ".join(f'"v{r}"' for r in list(range(32, 112)))
-
+# v16-proven composition: 4 asm ds_load_2addr_b64 (+v v4i outputs), one
+# s_wait_dscnt, then 16 WMMA builtins on C++ accs (no clobber lists).
 SRC = r"""
 typedef unsigned int uint;
 typedef int v2i __attribute__((ext_vector_type(2)));
+typedef int v4i __attribute__((ext_vector_type(4)));
+typedef int v8i __attribute__((ext_vector_type(8)));
 #define AST 10
 #define BST 256
 extern "C" __global__ void probe(const int* Aw, const int* Bw, int* Out) {
@@ -69,32 +38,41 @@ extern "C" __global__ void probe(const int* Aw, const int* Bw, int* Out) {
         }
     }
     __syncthreads();
-    register int a00_0 asm("v112"), a00_1 asm("v113");
-    register int a01_0 asm("v114"), a01_1 asm("v115");
-    register int a10_0 asm("v116"), a10_1 asm("v117");
-    register int a11_0 asm("v118"), a11_1 asm("v119");
-    a00_0 = lds[mrow0 * AST + 2 * kt];           a00_1 = lds[mrow0 * AST + 2 * kt + 1];
-    a01_0 = lds[mrow0 * AST + 2 * kt + 4];       a01_1 = lds[mrow0 * AST + 2 * kt + 5];
-    a10_0 = lds[(mrow0 + 8) * AST + 2 * kt];     a10_1 = lds[(mrow0 + 8) * AST + 2 * kt + 1];
-    a11_0 = lds[(mrow0 + 8) * AST + 2 * kt + 4]; a11_1 = lds[(mrow0 + 8) * AST + 2 * kt + 5];
     uint aB0 = (uint)(128 * AST + kt * BST + col * 2) * 4;
     uint aB2 = aB0 + 256, aB1 = (uint)(128 * AST + (kt + 2) * BST + col * 2) * 4, aB3 = aB1 + 256;
-    uint scratch = (uint)(128 * AST + 4 * BST + lane * 64) * 4;
-    __asm__ volatile(
-BODY
-        : : "v"(aB0), "v"(aB2), "v"(aB1), "v"(aB3), "v"(scratch),
-            "v"(a00_0), "v"(a00_1), "v"(a10_0), "v"(a10_1),
-            "v"(a01_0), "v"(a01_1), "v"(a11_0), "v"(a11_1)
-        : CLOB, "memory");
-    __syncthreads();
-    // scratch: lane*64 ints: acc0 (mg0 ng0) j0-7, acc1 (mg0 ng1), ..., acc7 (mg1 ng3)
-    for (int a = 0; a < 8; ++a) {
-        int mg = a / 4, ng = a % 4;
-        for (int j = 0; j < 8; ++j)
-            Out[(int)(mg * 16 + 8 * kt + j) * 64 + ng * 16 + col] = lds[128 * AST + 4 * BST + lane * 64 + a * 8 + j];
+    v4i fB0, fB1, fB2, fB3;
+    __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:16" : "=v"(fB0) : "v"(aB0));
+    __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:16" : "=v"(fB1) : "v"(aB2));
+    __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:16" : "=v"(fB2) : "v"(aB1));
+    __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:16" : "=v"(fB3) : "v"(aB3));
+    __asm__ volatile("s_wait_dscnt 0x0" ::: "memory");
+    v2i a00 = *(const v2i*)(lds + mrow0 * AST + 2 * kt);
+    v2i a01 = *(const v2i*)(lds + mrow0 * AST + 2 * kt + 4);
+    v2i a10 = *(const v2i*)(lds + (mrow0 + 8) * AST + 2 * kt);
+    v2i a11 = *(const v2i*)(lds + (mrow0 + 8) * AST + 2 * kt + 4);
+    const v2i b00 = fB0.xy, b01 = fB0.zw, b02 = fB1.xy, b03 = fB1.zw;
+    const v2i b10 = fB2.xy, b11 = fB2.zw, b12 = fB3.xy, b13 = fB3.zw;
+    v8i acc[8];
+    for (int i = 0; i < 8; ++i) acc[i] = {};
+    #pragma unroll
+    for (int ng = 0; ng < 4; ++ng) {
+        const v2i b = (ng == 0) ? b00 : (ng == 1) ? b01 : (ng == 2) ? b02 : b03;
+        acc[0 * 4 + ng] = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a00, 1, b, acc[0 * 4 + ng], 0);
+        acc[1 * 4 + ng] = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a10, 1, b, acc[1 * 4 + ng], 0);
     }
+    #pragma unroll
+    for (int ng = 0; ng < 4; ++ng) {
+        const v2i b = (ng == 0) ? b10 : (ng == 1) ? b11 : (ng == 2) ? b12 : b13;
+        acc[0 * 4 + ng] = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a01, 1, b, acc[0 * 4 + ng], 0);
+        acc[1 * 4 + ng] = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a11, 1, b, acc[1 * 4 + ng], 0);
+    }
+    int rbase = (lane >> 4) * 8;
+    for (int mg = 0; mg < 2; ++mg)
+        for (int ng = 0; ng < 4; ++ng)
+            for (int j = 0; j < 8; ++j)
+                Out[(int)((mg * 16 + 8 * kt + j) * 64 + ng * 16 + col)] = acc[mg * 4 + ng][j];
 }
-""".replace("BODY", body).replace("CLOB", clob)
+"""
 
 buf = ctypes.create_string_buffer(SRC.encode())
 prog = ctypes.c_void_p()
@@ -147,16 +125,10 @@ Btrue = B.cpu().numpy().astype(np.int64)   # B[k][n] direct
 # row absolute = mrow0_lane + (8kt + j)?? NO: relative row m = 8kt + j for the OWNING lane; A row = mrow0 + m.
 # For mg0: A row = col_of_lane + (8kt + j)?? The lane (kt,col) holds A[col][k]; relative row m=8kt+j is held by lane (kt, m):
 # its A fragment row = mrow0(lane) = col' = m -> absolute A row = m. So D row m <-> A row m (mg0), m+8 (mg1).
-ref0 = np.zeros((32, 64), dtype=np.int64)
-ref1 = np.zeros((32, 64), dtype=np.int64)
-for ktg in range(2):
-    ks0 = slice(16 * ktg, 16 * ktg + 16)              # call0, pair-row kt -> k 16kt..+15
-    ks1 = slice(32 + 16 * ktg, 48 + 16 * ktg)         # call1, pair-row kt+2
-    rows = slice(8 * ktg, 8 * ktg + 8)                # D rows for this kt group (mg0)
-    ref0[rows] += An[rows, ks0] @ Btrue[ks0]          # A row = D row (mg0)
-    ref1[slice(16 + 8 * ktg, 16 + 8 * ktg + 8)] += An[slice(8 * ktg + 8, 8 * ktg + 16), ks1] @ Btrue[ks1]
-e0 = np.abs(D0.astype(np.int64) - ref0[:16]).max()
-e1 = np.abs(D1.astype(np.int64) - ref1[16:32]).max()
+ref0 = An[:16] @ Btrue            # mg0: D row m = A row m, full K
+ref1 = An[8:24] @ Btrue           # mg1: D row m = A row m+8, full K
+e0 = np.abs(D0.astype(np.int64) - ref0).max()
+e1 = np.abs(D1.astype(np.int64) - ref1).max()
 print(f"pinned/clobber chunk probe: call0 err={e0}  call1 err={e1}  {'PASS' if e0 == 0 and e1 == 0 else 'FAIL'}")
 print('D0[0,:4] =', D0[0,:4].tolist(), ' ref0[0,:4] =', ref0[0,:4].tolist())
 print('D0[8,:4] =', D0[8,:4].tolist(), ' ref0[8,:4] =', ref0[8,:4].tolist())
