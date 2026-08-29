@@ -374,3 +374,20 @@ capacity (64 KB/CU blocks 256-row tiles). Within single-CTA-class WMMA
 kernels via hiprtc, v7b (128x128, 8w, 2m x 4n/warp, acc 64) is the
 occupancy-feasible optimum: ~230 TFLOPS steady / 257 cold-clock at
 K=4096 T=16384, exact, 1.07x the int8 rocBLAS rate.
+
+## Round 3: resume levers tested (v11-v12, int8 epilogue)
+- ISA/metadata: hiprtc compile log is EMPTY (no reg info); code-object
+  msgpack parse works: v7b = 103 VGPRs (no spills), v7 = 183, v8 = 191.
+- __launch_bounds__(128, {4,5,6,8}): IGNORED by this hiprtc — vgpr stays
+  183, TFLOPS unchanged (~186-192). Not a lever.
+- v12 triple-buffer (prefetch 2 ahead, 27.6 KB LDS): exact but ~185
+  TFLOPS — occupancy cost exceeds latency hiding. The L2-bandwidth-wall
+  hypothesis is also revised: the kernel only draws ~450 GB/s from L2
+  (measured AI x rate); the ~70% stall is barrier convergence + latency
+  exposure that neither deeper buffering nor more CTAs fixes here.
+- v11 small blocks: AI formula 4*TM*TN/(TM+TN) — 64x128 = 170 FLOP/B:
+  small blocks REDUCE reuse. Dead.
+- **int8 epilogue (signed char out, scale 1/64): 250.5 TFLOPS steady
+  (37.8%), runs 242-250, max quantization err 1/128 — NEW CHAMPION.**
+  Halves the fp32 write path; outputs are int8 activations ready for the
+  next quantized layer (the cubbylite pipeline use case).
