@@ -591,3 +591,19 @@ Cross-chunk fragment-register pipelining is structurally blocked by the
 LDS-buffer-depth/occupancy tradeoff (v12 triple-buffer: 185, dead).
 Steps 4-5 are effectively subsumed: v16 IS the persistent asm-body port
 (exact, measured 239.0); v15 remains the deliverable at 252.5 (38.1%).
+
+## ROUND 8: NEW CHAMPION — v19 (256x128 tiles, KCW=4): 261.4 TFLOPS (39.4%)
+Key unlock: KCW=4 (32-k chunks) halves the LDS footprint, letting the
+256-row x 128-col block tile (16 warps x 16 rows, 1m x 8n per warp,
+AI = 341 FLOP/B vs 262) fit the occupancy budget for the first time:
+16.4 KB LDS/CTA, ~105 VGPRs, P=84 (3 CTAs/CU), int8 epilogue (1/128).
+Quantization-exact (int8 truncation < 1 LSB).
+Head-to-head best-of-6, K=4096 T=16384:
+  v19 P=84 : 261.4 (39.4%)   <- NEW CHAMPION
+  v19 P=168: 256.3 (38.6%)
+  v15      : 252.7 (38.1%)   (previous champion)
+  v20 (v19 + sched-group-barriers): 253.4 — the trick does not transfer
+  to the 16-warp geometry.
+Session total: v4 83.5 -> v19 261.4 TFLOPS = 3.13x, 39.4% of the real
+663.5 TOPS peak, 1.21x int8 rocBLAS. P-curve jagged (wave quantization):
+84 > 168 > 140 > 112.
