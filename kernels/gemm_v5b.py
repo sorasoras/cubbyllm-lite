@@ -39,7 +39,7 @@ extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
     for (int i = 0; i < NT; ++i) acc[i] = {};
 
     auto load = [&](int kw, int buf) {         // kw in words; chunk = 8 words (64 k)
-        int* LA = lds + buf * 1152;
+        int* LA = lds + buf * 1600;
         int* LB = LA + 576;
         for (int w = threadIdx.y * 32 + lane; w < 64 * 9; w += 128) {
             int r = w / 9, q = w % 9;
@@ -47,13 +47,13 @@ extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
         }
         for (int w = threadIdx.y * 32 + lane; w < KCW * 64; w += 128) {
             int q = w >> 6, nl = w & 63;
-            LB[q * 64 + nl] = Bt[(kw + q) * N + n0 + nl];
+            LB[q * 128 + nl] = Bt[(kw + q) * N + n0 + nl];
         }
     };
-    load(0, 0);
-    __syncthreads();
     for (int kw = 0; kw < Kw; kw += KCW) {
-        int* LA = lds + (kw / KCW & 1) * 1152;
+        load(kw, 0);
+        __syncthreads();
+        int* LA = lds;
         int* LB = LA + 576;
         int row_local = warp * 16 + col;
         v2i a; a.x = LA[row_local * 9 + kt * 2]; a.y = LA[row_local * 9 + kt * 2 + 1];
@@ -62,8 +62,6 @@ extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
             b.y = LB[(kt + 2) * 64 + i * 16 + col];
             acc[i] = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a, 1, b, acc[i], 0);
         }
-        __syncthreads();
-        if (kw + KCW < Kw) load(kw + KCW, ((kw / KCW) + 1) & 1);
         __syncthreads();
     }
     int rbase = (lane >> 4) * 8;
@@ -103,7 +101,7 @@ def pack_transposed(t):
         out |= (t[:, i::8].t().long() & 0xF) << (4 * i)
     return out.to(torch.int32).contiguous()
 
-SHARED = 2 * 1152 * 4
+SHARED = 2 * 1600 * 4
 def launch(fn, grid, args_list, shared=SHARED):
     torch.cuda.synchronize()
     storage = [ctypes.c_void_p(t.data_ptr()) if torch.is_tensor(t) else ctypes.c_int32(t)
@@ -172,7 +170,7 @@ if __name__ == "__main__":
         base, rows64, n_e = seg_base[eid]
         ref = A_np[base:base+n_e] @ W_np[eid*N:(eid+1)*N].T
         err = max(err, np.abs(Out_np[base:base+n_e] - ref).max())
-    print(f"v5b grouped MoE (T={T}): sync={s1} memcpy={s2}  max|err| = {err:.1f}  {'PASS' if err == 0 else 'FAIL'}", flush=True)
+    print(f"v5b-sync grouped MoE (T={T}): sync={s1} memcpy={s2}  max|err| = {err:.1f}  {'PASS' if err == 0 else 'FAIL'}", flush=True)
 
     gflop = 2 * T * K * N / 1e9
     t_moe = bench(moe_launch)

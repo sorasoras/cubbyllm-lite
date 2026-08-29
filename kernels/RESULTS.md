@@ -45,3 +45,16 @@ K=32 dense standalone: exact, 34.9-35.7 TFLOPS. LDS bank-conflict padding
 
 v4 = 128 threads/block (4 warps), 64x64 output tile: 4 M-tiles share one
 LDS load (4x less B traffic), padded A stride. Exact at T=4096.
+
+## v5b status (94.2 TFLOPS, correctness OPEN)
+
+Deeper K-chunks (64-k) reached 94.8 TFLOPS grouped (+13% over v4) but the
+B-fragment/LDS indexing is still wrong (max|err| ~3308-3578 across fix
+attempts). Found & fixed en route: B LDS stride must be 128 (8 q-words x
+128 cols) for the NT=8 block tile — the v4-era 64-stride writes overflow
+the B region. The K=32 B-fragment layout (H3: fragment words are kt and
+kt+2 of the chunk, k = w*16 + kt*8 + j) was sweep-verified in isolation;
+the full-kernel residual bug is in the store/read index interaction under
+the NT=8 geometry. The verified deliverable remains v4 (83.5 TFLOPS,
+exact). Next: rebuild v5b indexing from the sweep-verified mapping in a
+minimal single-block harness before applying to the full kernel.
