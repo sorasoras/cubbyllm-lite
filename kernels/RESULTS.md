@@ -516,3 +516,25 @@ while 7 warps burn issue slots spinning. Structure refuted empirically.
 | v12 (triple-buffer) | 185 |
 | v17 (warp-specialized spin pipeline) | 65.4 (not yet exact) |
 Instruction peak (D=32-verified): 663.5. 70-80% target: 464-531.
+
+## ASSEMBLY CAMPAIGN (authorized): foundation laid, state at session close
+User authorized the multi-session hand-written GCN assembly effort.
+Core technique under test: manual VGPR allocation via pinned scalar
+register variables (register int x asm("v32")) + one inline-asm block
+per chunk (ds_load_2addr_b64 with immediate offsets, s_wait_dscnt,
+v_wmma with hardcoded register operands). verify_pinned.py:
+- compiles under hiprtc (88 pinned VGPRs: accs v32-63, B frags v64-79,
+  A frags v80-87)
+- current failure: host-side GPU fault; suspected operand bookkeeping —
+  the pinned A/acc regs must be declared "+v" read-write operands (done)
+  with correct %N numbering past 16 acc outputs (done); remaining
+  suspects: local-register-var/output-constraint double-binding, or the
+  hardcoded wmma register operands colliding with compiler temporaries.
+  Next steps for the effort: (1) get verify_pinned.py to err=0 on one
+  warp, (2) extend to the 8-warp full tile with 88+24 pinned regs,
+  (3) hand-place waits between load/compute groups for max overlap,
+  (4) port to the persistent grouped-MoE skeleton, (5) benchmark vs 252.5.
+Reusable assets: probe harnesses, ISA disasm flow, GFX12 asm recipes
+(b64-granule ds offsets, raw-address region/buffer bases, s_wait_dscnt,
+asm-output composition limits), all committed.
+Champion while the effort runs: v15 = 252.5 TFLOPS (38.1%), exact.
