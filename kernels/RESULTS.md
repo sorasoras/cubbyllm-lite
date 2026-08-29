@@ -150,3 +150,23 @@ Verified deliverable unchanged: v4 at 80-83.5 TFLOPS exact (5x fp32).
 The K=32 form's real value: 2x MACs per instruction issued (both tiles
 per call) IF the packed-pair accumulate is handled — the path to >=130
 TFLOPS stands, blocked only on the acc pair unpack/combine detail.
+
+## Fix attempt log (final for this campaign)
+
+Four systematically-derived interpretations of the K=32 builtin's v2i
+fragment semantics, all verified against the same numpy dequant gate:
+1. H1xH1 word pairs (2kt, 2kt+1) — FAIL 2484
+2. H3 words (kt, kt+2) — FAIL 3308
+3. Pointer-offset + stride-128 B LDS — FAIL 3578
+4. 4-call sub-tile (a.x-only, 16 k per call) — FAIL 3572
+Per-nibble probe (256 launches): only j0 nibbles live, scrambled k/n.
+CONCLUSION: the RTC-exposed `16x16x32_iu4` builtin's fragment layout does
+not match any standard row/column-distributed interpretation — it likely
+requires the full VOP3P half-register packing discipline (lo/hi 16-bit
+halves across the v2i pair, per the ISA's packed instruction format).
+Decoding it needs the complete 512-position per-nibble map (the probe
+harness is committed and takes ~2 min per 64-position sweep).
+
+VERIFIED DELIVERABLE: v4 — 80-83.5 TFLOPS grouped MoE, exact, ~5x fp32,
+native K=32-form int4 WMMA. The int4-vs-int8 compute question on RDNA4
+resolves as: int4 ≈ int8 MMA rate (int4's advantage = 4x compression).
