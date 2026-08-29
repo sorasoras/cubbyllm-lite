@@ -73,3 +73,15 @@ which successfully isolated the v2 LDS path) on the v5c kernel.
 
 **Verified deliverable: v4** — 80-83.5 TFLOPS grouped MoE, exact,
 4.95-5.07x fp32 eager, 52% of int8 rocBLAS, native K=32 int4 WMMA.
+
+## v5c fault characterization (final for this campaign)
+
+Staged-dump harness on v5c geometry: LDS load EXACT (0/1600 words wrong),
+per-lane fragment reads EXACT for all 8 tiles (0/128 lanes wrong), yet the
+full GEMM fails with column-dependent corruption: some columns near-exact
+(diff 5-21), others wildly wrong (diff ~1000). All stages individually
+verified — the fault is an interaction specific to the NT=8 geometry
+(suspects: fragment-read/LDS-write hazard across the 8-tile loop, or an
+RTC codegen issue with the wider fragment set). 10+ debug rounds, all
+harness bugs eliminated (verified via int* dump path + raw memcpy).
+v4 remains the verified deliverable: 80.2 TFLOPS, 5x fp32, exact.
