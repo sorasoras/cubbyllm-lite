@@ -714,3 +714,15 @@ quality validation.
 4. WMMA/MFMA sourcing: VGPR-only confirmed (swmma/mfma forms rejected);
    v_dot8_i32_iu4 (VALU dot) present; RDNA4 sparse-WMMA encoding TBD
    (mmapeak.hip.cpp holds the actual builtin).
+
+## NAMED-BARRIER RESUME ATTEMPT (session close)
+Corrections to the mechanism matrix: plain s_barrier is NOT on gfx1201
+(RDNA4 uses only the split s_barrier_signal/s_barrier_wait form — that
+IS the __syncthreads lowering). s_barrier_init/join assemble in llvm-mc
+AND compile through hiprtc. Semantic probe (probe_namedbarrier.py):
+two-warp handshake runs without hang, but warp1 reads warp0's LDS write
+as STALE (Out=[42,0]) — with and without an explicit s_wait_dscnt drain
+before the signal. The split-barrier cross-wave ordering semantics on
+RDNA4 are NOT the CDNA ones and remain UNDECODED (operands likely differ:
+count/ID fields). probe_namedbarrier.py is committed as the resume
+instrument — decode against the GFX12 ISA doc, then build v24.
