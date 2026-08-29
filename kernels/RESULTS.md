@@ -631,3 +631,22 @@ at P=84 — BELOW v19 (261.4). The LDS-traffic saving is offset by the
 doubled A reads + extra addressing. v19's LDS occupancy is evidently
 overlapped well enough; the binding constraint remains elsewhere.
 Champion unchanged: v19 = 261.4 (39.4%). Gap to 80% (530) = 2.03x.
+
+## ROUND 11: v22 — 256x256 block, 32 warps (1024 threads): TIE at 260.5
+The verifier's option (a) in its correct form: 32 warps, warp = 16 rows
+x one 128-col half (1m x 8n, acc 64 regs), B chunk loaded once for both
+halves. AI 512 FLOP/B (vs v19's 341) at the same wave residency
+(16 waves/SIMD, ~105 VGPRs, 20.5 KB LDS). Quantization-exact (err 1.0 =
+fp-boundary truncation class). P-sweep flat (1024-thr blocks: 1
+resident/CU): 253.6/251.1/252.1/260.5 for P=28/56/84/112.
+VERDICT: ties v19 (261.4) — the AI gain is consumed by LDS saturation
+(32 warps re-read the B fragments: 64 KB/chunk = 100% of VALU). The
+2m x 4n fix would halve B reads but v21 measured that blocking LOSES on
+this family. v19 remains champion; v22 recorded as the second-best
+variant with better L2 behavior at scale (AI 512 — the shape to revisit
+if N grows beyond 2048 or with future LDS-relief).
+Options (b) split-K: dead by arithmetic (2x fp32 partial write traffic
+exceeds the compute time at K=4096). Sequential-pass 256x256 with
+LDS-resident A: dead (A must reload per pass -> AI collapses to 341,
+measured-family trap).
+FINAL: v19 = 261.4 TFLOPS (39.4%), 205.1 at K=768. Gap to 80% = 2.03x.
