@@ -699,3 +699,18 @@ int4 SWMMAC path measured at 1138.4 TOPS in mmapeak (1.7x dense) —
 requires 2:4 weight sparsification (plausible for ES-allocated MoE
 weights) and a new sparse-fragment kernel; a fresh campaign with model-
 quality validation.
+
+## gfx1201 MECHANISM AVAILABILITY MATRIX (llvm-mc assemble-probed)
+1. Async VMEM->LDS (CDNA cp.async class): NOT PRESENT — all
+   global_load_lds / buffer_load_lds variants rejected. Confirms the
+   parked-goal conclusion at ISA level.
+2. Cross-CU sync (GWS): REMOVED — all ds_gws_* rejected on gfx1201.
+3. WORKGROUP NAMED BARRIERS: PRESENT!! s_barrier_init N, s_barrier_join
+   id, s_barrier_signal, s_barrier_wait — the CDNA barrier family
+   assembles on gfx1201. This is the missing primitive for the failed
+   v17 warp-specialization (which spun on LDS flags: 65 TFLOPS):
+   producer/consumer warps on separate named barriers = no global
+   phase-lock, no spin cost. UNTESTED — a genuine resume lever.
+4. WMMA/MFMA sourcing: VGPR-only confirmed (swmma/mfma forms rejected);
+   v_dot8_i32_iu4 (VALU dot) present; RDNA4 sparse-WMMA encoding TBD
+   (mmapeak.hip.cpp holds the actual builtin).
