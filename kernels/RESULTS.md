@@ -58,3 +58,18 @@ the full-kernel residual bug is in the store/read index interaction under
 the NT=8 geometry. The verified deliverable remains v4 (83.5 TFLOPS,
 exact). Next: rebuild v5b indexing from the sweep-verified mapping in a
 minimal single-block harness before applying to the full kernel.
+
+## NT=8/KCW=8 geometry (v5c): deterministic fault, open
+
+Regenerating v5 from the PRISTINE v4 source via a verified 14-step
+mechanical transform (NT 4→8, KCW 4→8, all LDS strides/decodes/derived
+constants) still fails: max|err| = 2484, deterministic across every fix
+attempt (B load-loop bound, stride-128 store/read, pointer-offset
+variant). All manual index analyses pass — the fault is structural to
+the NT=8 geometry (suspect: LDS capacity/occupancy interaction at
+128-col blocks, or a codegen issue with the wider fragment).
+Next session: run the staged-dump harness (v5b_stagedump.py pattern,
+which successfully isolated the v2 LDS path) on the v5c kernel.
+
+**Verified deliverable: v4** — 80-83.5 TFLOPS grouped MoE, exact,
+4.95-5.07x fp32 eager, 52% of int8 rocBLAS, native K=32 int4 WMMA.

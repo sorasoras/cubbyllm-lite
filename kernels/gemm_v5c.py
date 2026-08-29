@@ -1,4 +1,4 @@
-"""v5b: v4 + KCW=8 (64-k chunks). Minimal delta from the proven v4.
+"""v5c: v4 mechanically transformed to NT=8 (128-col blocks) + KCW=8 (64-k chunks).
 
 Block: 128 threads (4 warps, wave32). Warp w computes the 16x64 output
 sub-tile at M-row-block w; all warps share one LDS load of the 64x64 A
@@ -19,18 +19,17 @@ SRC = r"""
 typedef unsigned int uint32_t;
 typedef int v2i __attribute__((ext_vector_type(2)));
 typedef int v8i __attribute__((ext_vector_type(8)));
-#define NT 4
-#define KCW 8
+#define NT 8
 #define WARPS 4
 // A: (M, Kw) packed; Bt: (Kw, N) packed-transposed
 // grid: (N/64, M/64), block: 32 x 4 (lane, warp)
-extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
+extern "C" __global__ void gemm_i4_v5c(const uint32_t* __restrict__ Ap,
                                       const uint32_t* __restrict__ Bt,
                                       const float* __restrict__ scale,
                                       float* __restrict__ Out,
                                       int M, int N, int Kw) {
-    extern __shared__ int lds[];   // 2 bufs x (64*9 A-pad + 8*64 B) ints
-    int n0 = blockIdx.x * 64;
+    extern __shared__ int lds[];   // 2 bufs x (64*5 A + 4*64 B) ints
+    int n0 = blockIdx.x * 128;
     int mb = blockIdx.y * 64;
     int lane = threadIdx.x & 31;
     int warp = threadIdx.y & 3;
@@ -38,30 +37,32 @@ extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
     v8i acc[NT];
     for (int i = 0; i < NT; ++i) acc[i] = {};
 
-    auto load = [&](int kw, int buf) {         // kw in words; chunk = 8 words (64 k)
+    auto load = [&](int kw, int buf) {         // kw in words; chunk = 4 words (32 k)
         int* LA = lds + buf * 1600;
         int* LB = LA + 576;
         for (int w = threadIdx.y * 32 + lane; w < 64 * 9; w += 128) {
             int r = w / 9, q = w % 9;
             LA[r * 9 + q] = (q < 8) ? Ap[(mb + r) * Kw + kw + q] : 0;
         }
-        for (int w = threadIdx.y * 32 + lane; w < KCW * 128; w += 128) {
+        for (int w = threadIdx.y * 32 + lane; w < 8 * 128; w += 128) {
             int q = w >> 7, nl = w & 127;
             LB[q * 128 + nl] = Bt[(kw + q) * N + n0 + nl];
         }
     };
-    for (int kw = 0; kw < Kw; kw += KCW) {
-        load(kw, 0);
-        __syncthreads();
-        int* LA = lds;
+    load(0, 0);
+    __syncthreads();
+    for (int kw = 0; kw < Kw; kw += 8) {
+        int* LA = lds + (kw / 8 & 1) * 1600;
         int* LB = LA + 576;
         int row_local = warp * 16 + col;
         v2i a; a.x = LA[row_local * 9 + kt * 2]; a.y = LA[row_local * 9 + kt * 2 + 1];
         for (int i = 0; i < NT; ++i) {
-            v2i b; b.x = LB[(kt) * 64 + i * 16 + col];
-            b.y = LB[(kt + 2) * 64 + i * 16 + col];
+            v2i b; b.x = LB[(kt * 2) * 128 + i * 16 + col];
+            b.y = LB[(kt * 2 + 1) * 128 + i * 16 + col];
             acc[i] = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a, 1, b, acc[i], 0);
         }
+        __syncthreads();
+        if (kw + 8 < Kw) load(kw + 8, ((kw / 8) + 1) & 1);
         __syncthreads();
     }
     int rbase = (lane >> 4) * 8;
@@ -84,7 +85,7 @@ def compile_src(src, tag):
     m2 = ctypes.c_void_p()
     assert HIP.hipModuleLoadData(ctypes.byref(m2), code) == 0
     fn = ctypes.c_void_p()
-    assert HIP.hipModuleGetFunction(ctypes.byref(fn), m2, b"gemm_i4_v4") == 0
+    assert HIP.hipModuleGetFunction(ctypes.byref(fn), m2, b"gemm_i4_v5c") == 0
     return fn
 
 def pack(t):
@@ -155,7 +156,7 @@ if __name__ == "__main__":
             storage = [ctypes.c_void_p(t.data_ptr()) if torch.is_tensor(t) else ctypes.c_int32(t)
                        for t in args]
             ptrs = (ctypes.c_void_p * len(storage))(*[ctypes.cast(ctypes.byref(b), ctypes.c_void_p) for b in storage])
-            st = HIP.hipModuleLaunchKernel(fn, N // 64, rows64 // 64, 1, 32, 4, 1, SHARED, None, ptrs, None)
+            st = HIP.hipModuleLaunchKernel(fn, N // 128, rows64 // 64, 1, 32, 4, 1, SHARED, None, ptrs, None)
             assert st == 0
 
     moe_launch()
@@ -170,7 +171,7 @@ if __name__ == "__main__":
         base, rows64, n_e = seg_base[eid]
         ref = A_np[base:base+n_e] @ W_np[eid*N:(eid+1)*N].T
         err = max(err, np.abs(Out_np[base:base+n_e] - ref).max())
-    print(f"v5b-sync grouped MoE (T={T}): sync={s1} memcpy={s2}  max|err| = {err:.1f}  {'PASS' if err == 0 else 'FAIL'}", flush=True)
+    print(f"v4 grouped MoE (T={T}): sync={s1} memcpy={s2}  max|err| = {err:.1f}  {'PASS' if err == 0 else 'FAIL'}", flush=True)
 
     gflop = 2 * T * K * N / 1e9
     t_moe = bench(moe_launch)
@@ -178,7 +179,7 @@ if __name__ == "__main__":
     W_q = W_all[:N].to(torch.int8).contiguous()
     t_i8 = bench(lambda: torch._int_mm(A_q, W_q.t()))
     t_f32 = bench(lambda: A_tok[:T].float() @ W_all[:N].float().T)
-    print(f"v5b int4 grouped-MoE : {t_moe:6.3f} ms  {gflop/t_moe:6.1f} TFLOPS")
+    print(f"v4 int4 grouped-MoE : {t_moe:6.3f} ms  {gflop/t_moe:6.1f} TFLOPS")
     print(f"int8 _int_mm        : {t_i8:6.3f} ms  {gflop/t_i8:6.1f} TFLOPS")
     print(f"fp32 eager          : {t_f32:6.3f} ms  {gflop/t_f32:6.1f} TFLOPS")
-    print(f"v5b vs fp32: {t_f32/t_moe:.2f}x | vs int8: {t_i8/t_moe:.2f}x | % of 663.5 TOPS peak: {gflop/t_moe/663.5*100:.1f}%")
+    print(f"v4 vs fp32: {t_f32/t_moe:.2f}x | vs int8: {t_i8/t_moe:.2f}x | % of 663.5 TOPS peak: {gflop/t_moe/663.5*100:.1f}%")
