@@ -20,7 +20,7 @@ typedef unsigned int uint32_t;
 typedef int v2i __attribute__((ext_vector_type(2)));
 typedef int v8i __attribute__((ext_vector_type(8)));
 #define NT 4
-#define KCW 4
+#define KCW 8
 #define WARPS 4
 // A: (M, Kw) packed; Bt: (Kw, N) packed-transposed
 // grid: (N/64, M/64), block: 32 x 4 (lane, warp)
@@ -61,20 +61,20 @@ extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
         int row_local = warp * 16 + col;
         // KCW=8 words = 64 k = 4 K=16 sub-tiles; the builtin consumes a.x
         // (16 k per wave via the lane-group split) -> 4 calls per chunk
-        // one K=32 call per 32-k chunk (4 words); interleaved fragments
-        v2i a; a.x = LA[row_local * 12 + kt * 2];
-        a.y = LA[row_local * 12 + kt * 2 + 1];
-        for (int i = 0; i < NT; ++i) {
-            v2i b; b.x = LB[(kt * 2) * 128 + i * 16 + col];
-            b.y = LB[(kt * 2 + 1) * 128 + i * 16 + col];
-            v8i r = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a, 1, b, v8i{}, 0);
-            for (int j = 0; j < 8; ++j) {
-                int lo = (r[j] << 16) >> 16;   // sign-extend lo16
-                int hi = r[j] >> 16;           // sign-extend hi16
-                oacc[i][j] += (float)lo + (float)hi;
+        // 4 K=16-equivalent calls per 64-k chunk; word pairs (2s, 2s+1)
+        for (int s = 0; s < 4; ++s) {
+            v2i a; a.x = LA[row_local * 12 + s * 2]; a.y = LA[row_local * 12 + s * 2 + 1];
+            for (int i = 0; i < NT; ++i) {
+                v2i b; b.x = LB[(s * 2) * 128 + i * 16 + col];
+                b.y = LB[(s * 2 + 1) * 128 + i * 16 + col];
+                v8i r = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a, 1, b, v8i{}, 0);
+                for (int j = 0; j < 8; ++j) {
+                    int lo = (r[j] << 16) >> 16;
+                    int hi = r[j] >> 16;
+                    oacc[i][j] += (float)lo + (float)hi;
+                }
             }
         }
-        __syncthreads();
     }
     int rbase = (lane >> 4) * 8;
     for (int i = 0; i < NT; ++i)
@@ -100,32 +100,19 @@ def compile_src(src, tag):
     return fn
 
 def pack(t):
-    """VOP3P k-interleaved pack (confirmed layout):
-    k = c*64 + tt*32 + kt*16 + 2j + w  <->  packed word c*8 + tt*4 + kt*2 + w, nibble j."""
     R, K = t.shape
     out = torch.zeros((R, K // 8), device=t.device, dtype=torch.int64)
-    for c in range(K // 64):
-        for tt in range(2):
-            for kt in range(2):
-                for w in range(2):
-                    word = c * 8 + tt * 4 + kt * 2 + w
-                    for j in range(8):
-                        k = c * 64 + tt * 32 + kt * 16 + 2 * j + w
-                        out[:, word] |= (t[:, k].long() & 0xF) << (4 * j)
+    for i in range(8):
+        for j in range(8):
+            out[:, i] |= (t[:, i * 8 + j].long() & 0xF) << (4 * j)
     return out.to(torch.int32).contiguous()
 
 def pack_transposed(t):
-    """Same interleaved order, transposed: out[word, n] = t[n, k(word, nib)]."""
     N, K = t.shape
     out = torch.zeros((K // 8, N), device=t.device, dtype=torch.int64)
-    for c in range(K // 64):
-        for tt in range(2):
-            for kt in range(2):
-                for w in range(2):
-                    word = c * 8 + tt * 4 + kt * 2 + w
-                    for j in range(8):
-                        k = c * 64 + tt * 32 + kt * 16 + 2 * j + w
-                        out[word, :] |= ((t[:, k].t().long() & 0xF) << (4 * j))
+    for i in range(8):
+        for j in range(8):
+            out[i, :] |= (t[:, i * 8 + j].t().long() & 0xF) << (4 * j)
     return out.to(torch.int32).contiguous()
 
 SHARED = 2 * 1280 * 4
