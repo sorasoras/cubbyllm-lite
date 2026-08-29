@@ -476,3 +476,23 @@ Full kernel v16 (K=64 single chunk): err 1000, rows 0-63 (warp pairs
 0-1, 2-3) wrong, rows 64-127 (warps 4-7) exact — deterministic,
 mband-correlated, NOT a permutation of correct output.
 Champion remains v15: 250.6 TFLOPS (37.8%), exact.
+
+## Round 6 CONCLUSION: inline-asm body made EXACT; no throughput gain
+Root cause of the v16 corruption found and fixed: 6 inline-asm v4i
+outputs + 8 v8i accs mis-allocate under -O3 (warp-0-alone repro). With
+only the 4 reused B-fragment loads in asm (A frags via C++ pointer
+loads), the full 128x128 block verifies EXACT (verify_v16_block.py
+warp ladder: NW=8 -> err 0.0) and the full grouped-MoE kernel PASSES
+(err 0.0 at T=16384, K=4096).
+
+Head-to-head (fp32 out, P=168, best-of-5, K=4096 T=16384):
+  v7b  (compiler-scheduled): 244.8 TFLOPS (36.9%)
+  v16  (asm all-loads-then-compute): 239.0 TFLOPS (36.0%)
+The compiler's interleaved schedule slightly BEATS manual batching —
+consistent with the Round-4 ISA finding. Waitcnt latency is better
+covered by interleaved WMMA groups than by one big exposed wait.
+
+FINAL CHAMPION: v15 (sched-group-barrier + int8 epilogue) = 252.5 TFLOPS
+steady (38.1%), exact. The GFX12 inline-asm recipes (granule offsets,
+region/buffer bases, s_wait_dscnt, asm-output register-composition
+limits) are committed in gemm_v16.py + probes for future work.

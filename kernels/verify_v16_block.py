@@ -40,9 +40,16 @@ extern "C" __global__ void probe(const int* Aw, const int* Bw, int* Out) {
     uint aB0 = bufOff + (uint)(128 * AST + kt * BST + nb) * 4;
     uint aB1 = bufOff + (uint)(128 * AST + (kt + 2) * BST + nb) * 4;
     uint aB2 = aB0 + 256, aB3 = aB1 + 256;
+    // A frags via C++ loads (single-use per call); only the reused B frags via asm
     v4i fA0, fA1, fB0, fB1, fB2, fB3;
-    __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:2" : "=v"(fA0) : "v"(aA0));
-    __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:2" : "=v"(fA1) : "v"(aA1));
+    fA0.x = lds[mrow0 * AST + 2 * kt];
+    fA0.y = lds[mrow0 * AST + 2 * kt + 1];
+    fA0.z = lds[mrow0 * AST + 2 * kt + 4];
+    fA0.w = lds[mrow0 * AST + 2 * kt + 5];
+    fA1.x = lds[(mrow0 + 16) * AST + 2 * kt];
+    fA1.y = lds[(mrow0 + 16) * AST + 2 * kt + 1];
+    fA1.z = lds[(mrow0 + 16) * AST + 2 * kt + 4];
+    fA1.w = lds[(mrow0 + 16) * AST + 2 * kt + 5];
     __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:16" : "=v"(fB0) : "v"(aB0));
     __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:16" : "=v"(fB1) : "v"(aB2));
     __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:16" : "=v"(fB2) : "v"(aB1));
@@ -98,7 +105,8 @@ Out = torch.zeros(128 * 128, device="cuda", dtype=torch.int32)
 args = [Aw, Bw, Out]
 st = [ctypes.c_void_p(t.data_ptr()) for t in args]
 p = (ctypes.c_void_p * 3)(*[ctypes.cast(ctypes.byref(b), ctypes.c_void_p) for b in st])
-HIP.hipModuleLaunchKernel(fn, 1, 1, 1, 32, 8, 1, (128 * 10 + 4 * 256) * 4, None, p, None)
+NW = int(sys.argv[1]) if len(sys.argv) > 1 else 8
+HIP.hipModuleLaunchKernel(fn, 1, 1, 1, 32, NW, 1, (128 * 10 + 4 * 256) * 4, None, p, None)
 HIP.hipDeviceSynchronize()
 host = np.zeros(128 * 128, dtype=np.int32)
 HIP.hipMemcpy(host.ctypes.data_as(ctypes.c_void_p), ctypes.c_void_p(Out.data_ptr()), 128 * 128 * 4, 2)
@@ -113,12 +121,16 @@ An = unpack_signed(Aw)
 Bn = unpack_signed(Bw)
 Btrue = Bn.T   # Btrue[k][n]
 ref = An @ Btrue
-err = np.abs(D.astype(np.int64) - ref)
-print(f"full-block v16 chunk probe: max|err| = {err.max()}  {'PASS' if err.max() == 0 else 'FAIL'}")
+mrows = ((NW + 1) // 2) * 32
+sub = D[:mrows]
+refsub = ref[:mrows]
+err = np.abs(sub.astype(np.int64) - refsub)
+print(f"warps={NW}: covered {mrows}x128  max|err| = {err.max()}  {'PASS' if err.max() == 0 else 'FAIL'}")
 if err.max():
-    band = np.zeros((4, 2), dtype=int)
-    for mb in range(4):
+    for mb in range(mrows // 32):
         for nbd in range(2):
-            band[mb, nbd] = err[mb*32:(mb+1)*32, nbd*64:(nbd+1)*64].max()
-    print("err bands (32-row x 64-col):")
-    print(band)
+            e = err[mb*32:(mb+1)*32, nbd*64:(nbd+1)*64].max()
+            print(f"  mb{mb} nband{nbd}: {e}")
+    bad = np.argwhere(err > 0)
+    r, c = bad[0]
+    print(f"  first bad: row {r} (mg {(r%32)//16}, in-16 {r%16}, kt {((r%32)%16)//8}), col {c} (ng {c//16}, in-16 {c%16})")

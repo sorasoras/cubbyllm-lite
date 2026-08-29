@@ -82,16 +82,16 @@ extern "C" __global__ void moe_v16(const uint32_t* __restrict__ Ap,
             // 6 ds_load_2addr_b64 (volatile: LLVM may not interleave), one
             // explicit s_waitcnt lgkmcnt(0), then 16 WMMAs back-to-back.
             uint32_t bufOff = (uint32_t)(((kw / KCW) & 1) * BUFSZ) * 4;    // double-buffer base
-            uint32_t aA0 = bufOff + (uint32_t)(mrow0 * AST + 2 * kt) * 4;
-            uint32_t aA1 = bufOff + (uint32_t)((mrow0 + 16) * AST + 2 * kt) * 4;
             uint32_t aB0 = bufOff + (uint32_t)(128 * AST + kt * BST + nb) * 4;       // LB = lds + 128*AST
             uint32_t aB1 = bufOff + (uint32_t)(128 * AST + (kt + 2) * BST + nb) * 4;
             uint32_t aB2 = aB0 + 256, aB3 = aB1 + 256;   // ds offsets are b64 granules (8B)
-            v4i fA0, fA1, fB0, fB1, fB2, fB3;
-            __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:2"
-                             : "=v"(fA0) : "v"(aA0));
-            __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:2"
-                             : "=v"(fA1) : "v"(aA1));
+            // A frags via C++ loads (4 asm v4i outputs + 8 v8i accs alias under -O3;
+            // 4 asm outputs + C++ A loads verified exact on the full 128x128 block)
+            v2i a00 = *(const v2i*)(LA + mrow0 * AST + 2 * kt);
+            v2i a01 = *(const v2i*)(LA + mrow0 * AST + 2 * kt + 4);
+            v2i a10 = *(const v2i*)(LA + (mrow0 + 16) * AST + 2 * kt);
+            v2i a11 = *(const v2i*)(LA + (mrow0 + 16) * AST + 2 * kt + 4);
+            v4i fB0, fB1, fB2, fB3;
             __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:16"
                              : "=v"(fB0) : "v"(aB0));
             __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:16"
@@ -101,7 +101,7 @@ extern "C" __global__ void moe_v16(const uint32_t* __restrict__ Ap,
             __asm__ volatile("ds_load_2addr_b64 %0, %1 offset0:0 offset1:16"
                              : "=v"(fB3) : "v"(aB3));
             __asm__ volatile("s_wait_dscnt 0x0" ::: "memory");
-            v2i a0 = fA0.xy, a1 = fA1.xy;
+            const v2i a0 = a00, a1 = a10;
             const v2i b00 = fB0.xy, b01 = fB0.zw, b02 = fB1.xy, b03 = fB1.zw;
             const v2i b10 = fB2.xy, b11 = fB2.zw, b12 = fB3.xy, b13 = fB3.zw;
             // call 0: A word-pair 2kt, B pair-row kt
@@ -115,8 +115,8 @@ extern "C" __global__ void moe_v16(const uint32_t* __restrict__ Ap,
             #pragma unroll
             for (int ng = 0; ng < 4; ++ng) {
                 const v2i b = (ng == 0) ? b10 : (ng == 1) ? b11 : (ng == 2) ? b12 : b13;
-                acc[0 * 4 + ng] = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, fA0.zw, 1, b, acc[0 * 4 + ng], 0);
-                acc[1 * 4 + ng] = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, fA1.zw, 1, b, acc[1 * 4 + ng], 0);
+                acc[0 * 4 + ng] = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a01, 1, b, acc[0 * 4 + ng], 0);
+                acc[1 * 4 + ng] = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a11, 1, b, acc[1 * 4 + ng], 0);
             }
             // prefetch next chunk into the OTHER buffer while acc math drains;
             // single end-of-chunk sync orders both the buffer swap and the load
