@@ -278,3 +278,20 @@ packed-acc behavior across the two internal 16x16x16 dots.
 Next session: bisect by tile — run with only t=0 active (zeros in the
 t=1 fragment words) and compare against the t=0-only reference; if
 exact, the fault is isolated to the t=1 tile's word mapping.
+
+## TILE BISECT: ROOT CAUSE CONFIRMED — OOB fragment reads in the NT=8 two-tile compute
+
+Both t=0-only and t=1-only runs produce NaN/garbage (793/1010 err, with
+"invalid value in subtract" = NaN in the kernel output). The arithmetic:
+the two-tile compute's B fragment reads use word index t*4 + kt*2 + w
+which spans 0..11 for t∈{0,1}, kt∈{0..3} — but the 64-k chunk has only
+8 words (0..7). The reads go 128+ ints past the B LDS region → NaN.
+(The (t,kt) indexing over-covers: 2 calls × 4 kt-groups = 16 word-slots
+for an 8-word chunk.)
+
+THE FIX: revert to KCW=4 (32-k chunks, v4's proven structure — where
+t*4 + kt*2 + w ≤ 3 exactly matches the 4-word chunk) and recover the
+throughput via OTHER levers: (a) 2 CTAs/CU occupancy tuning, (b) NT=8
+with KCW=4 (double the N-tiles per 32-k chunk), (c) K=32 builtin calls
+with the fragment layout treated as TWO K=16 fragments per v2i (the
+a.x/a.y as separate K=16 fragments, 2 calls per 4-word pair).
