@@ -1,0 +1,6 @@
+model 214.9M params on privateuseone:0 (d=768, hid=2048, 8+1 experts, 7 blocks)
+uniform CE = 5.545
+gen    0  ce 8.159  (init 0s)
+B:\git\cubbyllm-lite\cubbylite\scale_torch.py:188: UserWarning: The operator 'aten::std.correction' is not currently supported on the DML backend and will fall back to run on the CPU. This may have performance implications. (Triggered internally at C:\__w\1\s\pytorch-directml-plugin\torch_directml\csrc\dml\dml_cpu_fallback.cpp:17.)
+  a = (acc - acc.mean()) / (acc.std() + 1e-8)
+gen   10  ce 5.673  ppl   290.9  bal 0.08/0.25  (195s, 20.3s/gen)

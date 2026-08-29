@@ -59,14 +59,17 @@ extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
         int* LA = lds;
         int* LB = LA + 768;
         int row_local = warp * 16 + col;
-        // KCW=8 words = 64 k = 4 K=16 sub-tiles; the builtin consumes a.x
-        // (16 k per wave via the lane-group split) -> 4 calls per chunk
-        // 4 calls per 64-k chunk, word pairs (2s, 2s+1), direct 32-bit results
-        for (int s = 0; s < 4; ++s) {
-            v2i a; a.x = LA[row_local * 12 + s * 2]; a.y = LA[row_local * 12 + s * 2 + 1];
+        // KCW=8 words = 64 k. The builtin reads lane-group kt's fragment as
+        // k-slot 16kt..16kt+15, so call c must feed kt=0 words (4kt+2c base):
+        // call 0: kt0 words 0,1 (k 0-15) + kt1 words 4,5 (k 32-47)
+        // call 1: kt0 words 2,3 (k 16-31) + kt1 words 6,7 (k 48-63)
+        // -> all 64 k consumed exactly once per chunk (2 calls x 8192 MACs).
+        for (int s = 0; s < 2; ++s) {
+            v2i a; a.x = LA[row_local * 12 + 4 * kt + s * 2];
+            a.y = LA[row_local * 12 + 4 * kt + s * 2 + 1];
             for (int i = 0; i < NT; ++i) {
-                v2i b; b.x = LB[(s * 2) * 128 + i * 16 + col];
-                b.y = LB[(s * 2 + 1) * 128 + i * 16 + col];
+                v2i b; b.x = LB[(4 * kt + s * 2) * 128 + i * 16 + col];
+                b.y = LB[(4 * kt + s * 2 + 1) * 128 + i * 16 + col];
                 v8i r = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a, 1, b, v8i{}, 0);
                 for (int j = 0; j < 8; ++j)
                     oacc[i][j] += (float)r[j];
@@ -100,16 +103,14 @@ def pack(t):
     R, K = t.shape
     out = torch.zeros((R, K // 8), device=t.device, dtype=torch.int64)
     for i in range(8):
-        for j in range(8):
-            out[:, i] |= (t[:, i * 8 + j].long() & 0xF) << (4 * j)
+        out |= (t[:, i::8].long() & 0xF) << (4 * i)
     return out.to(torch.int32).contiguous()
 
 def pack_transposed(t):
     N, K = t.shape
     out = torch.zeros((K // 8, N), device=t.device, dtype=torch.int64)
     for i in range(8):
-        for j in range(8):
-            out[i, :] |= (t[:, i * 8 + j].t().long() & 0xF) << (4 * j)
+        out |= (t[:, i::8].t().long() & 0xF) << (4 * i)
     return out.to(torch.int32).contiguous()
 
 SHARED = 2 * 1280 * 4

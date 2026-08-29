@@ -1,0 +1,17 @@
+model 214.9M params on privateuseone:0 (d=768, hid=2048, 8+1 experts, 7 blocks)
+uniform CE = 5.545
+gen    0  ce 8.159  (init 1s)
+Traceback (most recent call last):
+  File "B:\git\cubbyllm-lite\cubbylite\scale_torch.py", line 159, in <module>
+    fit.append(-ce(x_fit, y_fit, m_fit).item())
+                ^^^^^^^^^^^^^^^^^^^^^^^
+  File "B:\git\cubbyllm-lite\cubbylite\scale_torch.py", line 120, in ce
+    logits, _ = forward(idx, masks)
+                ^^^^^^^^^^^^^^^^^^^
+  File "B:\git\cubbyllm-lite\cubbylite\scale_torch.py", line 105, in forward
+    h_all = spike(x @ torch.cat([W[f"{P}e{e}_1"] for e in range(NEXP)], 0).T)  # (B,T,NEXP*HID)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "B:\git\cubbyllm-lite\cubbylite\scale_torch.py", line 86, in spike
+    return torch.sign(x) * (x.abs() > thr).float()
+                            ^^^^^^^
+RuntimeError: Could not allocate tensor with 134217728 bytes. There is not enough GPU video memory available!
