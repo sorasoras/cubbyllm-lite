@@ -607,3 +607,17 @@ Head-to-head best-of-6, K=4096 T=16384:
 Session total: v4 83.5 -> v19 261.4 TFLOPS = 3.13x, 39.4% of the real
 663.5 TOPS peak, 1.21x int8 rocBLAS. P-curve jagged (wave quantization):
 84 > 168 > 140 > 112.
+
+## ROUND 9: follow-up levers resolved (v19 stands at 261.4)
+1. KCW=2: STRUCTURALLY IMPOSSIBLE for this instruction — the 16x16x32
+   call reads lane-group kt words (4s+2kt, +1) = 4 words per call
+   minimum; a 2-word chunk would make kt=1 read the next chunk. KCW=4
+   is the floor (already the champion's setting).
+2. Fine P sweep (K=4096, best-of-4): P=84 is the sharp wave-quantization
+   optimum (260.1) — exactly 3 CTAs/CU x 28 CUs. P=91/98 collapse to
+   ~185, P=56 to 210. Confirmed.
+3. Realistic MoE shape K=768: v19 = 205.1 TFLOPS (30.9%) at P=84 —
+   +61% over the v6-class kernels at this shape (~127) and near the
+   int8-output write ceiling for the shape.
+FINAL: v19 champion confirmed (261.4 @ K=4096, 205.1 @ K=768),
+quantization-exact, int8 activations out.
