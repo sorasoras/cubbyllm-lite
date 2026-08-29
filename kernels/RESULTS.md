@@ -364,3 +364,13 @@ vs v4 (83.5): **2.8x**. All exact.
   handoff, (b) int8/fp16 epilogue output (-6% write path), (c) schedule
   for IC locality at K=4096 (B working set 32 MB > L2), (d) hiprtc code
   inspection (spill counts) via -gline-tables+asm dump.
+
+## Post-script: small-block AI check (v11, not landed)
+Block-tile AI = 4*TM*TN/(TM+TN): 64x128 -> 170, 128x128 -> 256, 128x256
+-> 341, 256x256 -> 512 FLOP/B. Small blocks REDUCE reuse; the AI ladder
+is monotonic in tile size, and tile size is capped by acc registers
+(64-reg configs keep >20 waves/CU; 128-reg configs lose 20-25%) and LDS
+capacity (64 KB/CU blocks 256-row tiles). Within single-CTA-class WMMA
+kernels via hiprtc, v7b (128x128, 8w, 2m x 4n/warp, acc 64) is the
+occupancy-feasible optimum: ~230 TFLOPS steady / 257 cold-clock at
+K=4096 T=16384, exact, 1.07x the int8 rocBLAS rate.
