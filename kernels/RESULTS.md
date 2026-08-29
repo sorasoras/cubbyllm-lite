@@ -199,3 +199,27 @@ mechanical; the analysis (a small linear-system solve per operand) is
 the remaining work. NOTE: this only matters for extracting MORE than
 the currently-achieved throughput — the K=16-equivalent usage (v4) is
 semantically correct as-is and delivers 80-83.5 TFLOPS exact.
+
+## Full 32-lane sweep COMPLETE (v5c_map.txt, fullsweep2.log)
+
+Complete per-nibble mapping captured (128 lines, all lanes, both words):
+
+A fragment: lane l (both words identical) -> m = l%16; k-block = l/16
+  (lanes 0-15 -> k-block 0, lanes 16-31 -> k-block 1). Both v2i words
+  redundant (hold the same data).
+B fragment: lane l (both words identical) -> n = l%16 for l<16;
+  lanes 16-31 REPEAT n = (l-16)%16 (duplicate n-coverage!).
+
+D-value readout: the A/B nibble pairing crosses lane groups (A lane l
+pairs with B lane ~l+16), and both operands' v2i words are redundant
+copies. CONCLUSION: the hardware's K=32 form expects each v2i fragment
+word pair to carry the SAME data (the two ints are lo|hi 16-bit halves
+of the same 16 int4 values, per VOP3P), and the D output accumulates
+the two half-tiles into the packed acc pairs.
+
+The v5b failures are explained: the kernel treated the v2i as 32
+contiguous k (words kt*2/kt*2+1 as DIFFERENT k) — but the hardware
+reads them as REDUNDANT copies of 16 k. The fix: deduplicate — load
+each 16-k chunk once per (lane-group, k-block) and use the builtin's
+packed-pair accumulate, OR simply use the verified v4 (which is
+semantically correct as a K=16-equivalent at half rate).

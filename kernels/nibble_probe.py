@@ -56,9 +56,11 @@ for k in range(K):
     ramp_hi[:, k] = (k // 16) + 1
 B_ramp_lo = torch.zeros(K, 16, device="cuda", dtype=torch.int32)
 B_ramp_hi = torch.zeros(K, 16, device="cuda", dtype=torch.int32)
+B_n_ramp = torch.zeros(K, 16, device="cuda", dtype=torch.int32)
 for k in range(K):
     B_ramp_lo[k, :] = k % 16
-    B_ramp_hi[k, :] = (k // 16) + 1     # 1 for k<16, 2 for k>=16
+    B_ramp_hi[k, :] = (k // 16) + 1
+    B_n_ramp[k, :] = torch.arange(16, device="cuda")     # 1 for k<16, 2 for k>=16
 
 def zero_frag():
     return torch.zeros(64, dtype=torch.int32, device="cuda")
@@ -103,14 +105,15 @@ for l in range(32):
     for w in range(2):
         for j in range(8):
             af = set_nibble(zero_frag(), l, w, j)
-            D1 = launch(af, B_ramp_lo)
-            D2 = launch(af, B_ramp_hi)
-            nz1 = np.argwhere(D1 != 0)
-            if len(nz1):
-                r, n = int(nz1[0][0]), int(nz1[0][1])
-                klo = int(D1[r, n])
-                khi = int(D2[r, n])
-                a_map[(l, w, j)] = (r, klo, khi - 1)
+            Dn = launch(af, B_n_ramp)          # D[m][n] = n at the lit (m,n)
+            Dk = launch(af, B_ramp_lo)         # D[m][n] = k%16 at the lit (m,n)
+            Dh = launch(af, B_ramp_hi)         # D[m][n] = 16-block flag
+            nz = np.argwhere(Dn != 0)
+            if len(nz):
+                r, n = int(nz[0][0]), int(nz[0][1])
+                klo = int(Dk[r, n])
+                khi = int(Dh[r, n]) - 1
+                a_map[(l, w, j)] = (r, klo, khi)
             else:
                 a_map[(l, w, j)] = None
 for l in range(32):
