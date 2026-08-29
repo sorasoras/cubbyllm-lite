@@ -621,3 +621,13 @@ Session total: v4 83.5 -> v19 261.4 TFLOPS = 3.13x, 39.4% of the real
    int8-output write ceiling for the shape.
 FINAL: v19 champion confirmed (261.4 @ K=4096, 205.1 @ K=768),
 quantization-exact, int8 activations out.
+
+## ROUND 10 (toward 80%): v21 = 2m x 4n warp blocking on v19 — measured, below champion
+Motivation: v19's 16 warps re-read all 8 B fragments per chunk (36 KB
+LDS/chunk vs 256 VALU-clk = 112% LDS-bound). v21 gives each warp a
+32x64 tile (2m x 4n): B reads halve (16 KB), A doubles (8 KB) -> 24 KB
+(75% of VALU). Measured: quantization-exact, P-sweep peak 251.7 (37.9%)
+at P=84 — BELOW v19 (261.4). The LDS-traffic saving is offset by the
+doubled A reads + extra addressing. v19's LDS occupancy is evidently
+overlapped well enough; the binding constraint remains elsewhere.
+Champion unchanged: v19 = 261.4 (39.4%). Gap to 80% (530) = 2.03x.
