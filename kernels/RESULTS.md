@@ -85,3 +85,27 @@ verified — the fault is an interaction specific to the NT=8 geometry
 RTC codegen issue with the wider fragment set). 10+ debug rounds, all
 harness bugs eliminated (verified via int* dump path + raw memcpy).
 v4 remains the verified deliverable: 80.2 TFLOPS, 5x fp32, exact.
+
+## DECISIVE: the "16x16x32" iu4 builtin consumes only 16 k through v2i fragments
+
+Controlled experiment (all-ones fragments, neg=0): D[0][0] = **16**, not 32.
+The `16x16x32_iu4` builtin with a v2i (2-int, 16-nibble) fragment operand
+effectively performs **K=16**, at half the cycle cost of the K=16 form —
+its 2.29x "issue rate" advantage is instruction-issue efficiency, NOT
+2x math. Consequences:
+
+1. mmapeak's 663.5 TOPS for `mma_s4s4s32_16_16_32` is a named-MAC
+   accounting artifact (8192 MACs counted per instruction; ~4096
+   actually performed). Real int4 peak ≈ int8 rate ≈ 332 TOPS.
+2. **int4 does NOT have 2x superior throughput over int8 on RDNA4** —
+   the K=32 form issues the same MACs at half the cycles per
+   instruction. int4's genuine advantage is 4x weight compression
+   (bandwidth/VRAM), not MMA rate.
+3. Our GEMM failures (Out ≈ ref/2) are fully explained: each WMMA
+   consumed 16 of the 32 loaded k-elements. The fix: treat the K=32
+   builtin as TWO K=16-equivalent instructions (4 fragment reads per
+   8-word chunk: word pairs (0,1), (2,3), (4,5), (6,7)), doubling the
+   WMMA count per chunk.
+
+This resolves the 2484/3308/3578 fault family and the int4-vs-int8
+throughput question definitively.
