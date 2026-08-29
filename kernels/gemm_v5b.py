@@ -99,17 +99,32 @@ def compile_src(src, tag):
     return fn
 
 def pack(t):
+    """VOP3P k-interleaved pack (confirmed layout):
+    k = c*64 + tt*32 + kt*16 + 2j + w  <->  packed word c*8 + tt*4 + kt*2 + w, nibble j."""
     R, K = t.shape
     out = torch.zeros((R, K // 8), device=t.device, dtype=torch.int64)
-    for i in range(8):
-        out |= (t[:, i::8].long() & 0xF) << (4 * i)
+    for c in range(K // 64):
+        for tt in range(2):
+            for kt in range(2):
+                for w in range(2):
+                    word = c * 8 + tt * 4 + kt * 2 + w
+                    for j in range(8):
+                        k = c * 64 + tt * 32 + kt * 16 + 2 * j + w
+                        out[:, word] |= (t[:, k].long() & 0xF) << (4 * j)
     return out.to(torch.int32).contiguous()
 
 def pack_transposed(t):
+    """Same interleaved order, transposed: out[word, n] = t[n, k(word, nib)]."""
     N, K = t.shape
     out = torch.zeros((K // 8, N), device=t.device, dtype=torch.int64)
-    for i in range(8):
-        out |= (t[:, i::8].t().long() & 0xF) << (4 * i)
+    for c in range(K // 64):
+        for tt in range(2):
+            for kt in range(2):
+                for w in range(2):
+                    word = c * 8 + tt * 4 + kt * 2 + w
+                    for j in range(8):
+                        k = c * 64 + tt * 32 + kt * 16 + 2 * j + w
+                        out[word, :] |= ((t[:, k].t().long() & 0xF) << (4 * j))
     return out.to(torch.int32).contiguous()
 
 SHARED = 2 * 1600 * 4

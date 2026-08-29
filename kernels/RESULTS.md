@@ -246,3 +246,19 @@ LDS indirection (the LDS store indexing must match the interleave, and
 the half-test D=16-vs-32 neg-flag asymmetry needs one controlled check).
 All harnesses committed. Verified deliverable: v4 — 80-83.5 TFLOPS
 grouped MoE, exact, ~5x fp32, native int4 K=32 WMMA on RDNA4/Windows.
+
+## Integration state (final for this session)
+
+The interleaved packers are INSTALLED in gemm_v5b.py (confirmed correct
+by the single-tile test). The compute block in the file is the "4-call
+sub-tile" variant (a.x-only, s-loop over 4 sub-tiles, b.y=b.x) — which
+still fails (3572). The PRECISE remaining edit, derived from the
+confirmed layout: replace the s-loop compute with the two-tile form —
+  for t in 0..1:
+    a = v2i(LA[row*9 + t*4 + kt*2], LA[row*9 + t*4 + kt*2 + 1])
+    for i in 0..NT:
+      b = v2i(LB[(t*4 + kt*2)*128 + i*16 + col],
+              LB[(t*4 + kt*2 + 1)*128 + i*16 + col])
+      acc[i] = builtin(1, a, 1, b, acc[i], 0)
+with the interleaved packers (installed) feeding LDS. One careful edit +
+verify remains; all pieces are confirmed individually.
