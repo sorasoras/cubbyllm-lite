@@ -756,3 +756,25 @@ specialization is definitively a NO-GO on this hardware. The named-
 barrier avenue — the last identified resume lever — is now measured
 dead, closing the sync dimension exactly as the async-copy dimension
 already was. v19 (261.4 TFLOPS, 39.4%) remains the deliverable.
+
+## hipBLASLt ON WINDOWS gfx1201: WORKING + DECISIVE VENDOR COMPARISON
+Setup: TheRock 7.9 windows dist (therock-dist-windows-gfx120X-all-7.9.0rc
+20251008.tar.gz from rocm.nightlies.amd.com/tarball/, root-path URLs — the
+v2 whl index is stale/404). Extracted libhipblaslt.dll + full hipblaslt/
+library/ (Kernels.so-000-gfx1201.hsaco + TensileLibrary lazy .dat) into
+the 7.14 runtime's bin (7.14 amdhip64 + 7.9 libhipblaslt = working mix).
+hipBLASLt version 100100 (1.1.0). hipblaslt-bench sees the RX 9070.
+
+VENDOR BENCHMARKS (M=4096, N=2048, K=4096, best over all algos):
+  hipBLASLt int8 (i8_r/i32_r, 43 algos):  63.8 TFLOPS
+  hipBLASLt fp16 (f16_r):                 105.5 TFLOPS
+  torch._int_mm (rocBLAS int8):           216-242 TFLOPS
+  v19 (our int4 custom kernel):           261.4 TFLOPS  <- 4.1x vendor int8
+
+CONCLUSION: AMD's vendor hipBLASLt on RDNA4/Windows is dramatically
+UNOPTIMIZED (consistent with open issue ROCm#5674 "RDNA4 not very well
+supported in ROCm yet"). Our custom int4 kernel beats the vendor int8
+path by 4.1x and the vendor fp16 path by 2.5x. The 261.4 TFLOPS (39.4%)
+plateau is VALIDATED as far beyond vendor offerings, not a sign of a
+weak kernel. No MXFP4/fp4 GEMM exposed in the 7.9 bench on RDNA4
+(precision options stop at i8_r).
