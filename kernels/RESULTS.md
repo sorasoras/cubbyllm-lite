@@ -262,3 +262,19 @@ confirmed layout: replace the s-loop compute with the two-tile form —
       acc[i] = builtin(1, a, 1, b, acc[i], 0)
 with the interleaved packers (installed) feeding LDS. One careful edit +
 verify remains; all pieces are confirmed individually.
+
+## Stride-12 atomic fix: error UNCHANGED (23.0) — diagnosis refined
+
+The atomic stride-12 fix (buffer geometry 1792 ints, A store stride 12,
+fragment reads stride 12, B base 768, SHARED 14336) applied cleanly —
+7 consistent replacements — and the error is IDENTICAL (23.0). The
+slot-overflow diagnosis is therefore WRONG: all (t, kt, w) fragment
+reads were already in-bounds at stride 9 for the failing positions.
+The residual 23.0 is elsewhere in the K=32 data path — remaining
+suspects: (a) the two-tile fragment word mapping (t*4 + kt*2 + w) vs
+the pack's k formula disagreeing for the SECOND tile (t=1) — i.e. the
+k = tt*32 + ... vs tt*16 + ... tile-base arithmetic; (b) the builtin's
+packed-acc behavior across the two internal 16x16x16 dots.
+Next session: bisect by tile — run with only t=0 active (zeros in the
+t=1 fragment words) and compare against the t=0-only reference; if
+exact, the fault is isolated to the t=1 tile's word mapping.

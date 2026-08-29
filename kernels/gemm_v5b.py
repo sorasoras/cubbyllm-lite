@@ -39,11 +39,11 @@ extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
     for (int i = 0; i < NT; ++i) acc[i] = {};
 
     auto load = [&](int kw, int buf) {         // kw in words; chunk = 8 words (64 k)
-        int* LA = lds + buf * 1600;
-        int* LB = LA + 576;
+        int* LA = lds + buf * 1792;
+        int* LB = LA + 768;
         for (int w = threadIdx.y * 32 + lane; w < 64 * 9; w += 128) {
             int r = w / 9, q = w % 9;
-            LA[r * 9 + q] = (q < 8) ? Ap[(mb + r) * Kw + kw + q] : 0;
+            LA[r * 12 + q] = (q < 8) ? Ap[(mb + r) * Kw + kw + q] : 0;
         }
         for (int w = threadIdx.y * 32 + lane; w < KCW * 128; w += 128) {
             int q = w >> 7, nl = w & 127;
@@ -57,14 +57,14 @@ extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
         load(kw, 0);
         __syncthreads();
         int* LA = lds;
-        int* LB = LA + 576;
+        int* LB = LA + 768;
         int row_local = warp * 16 + col;
         // KCW=8 words = 64 k = 4 K=16 sub-tiles; the builtin consumes a.x
         // (16 k per wave via the lane-group split) -> 4 calls per chunk
         // two K=32 calls per 64-k chunk; interleaved fragments (confirmed layout)
         for (int t = 0; t < 2; ++t) {
-            v2i a; a.x = LA[row_local * 9 + t * 4 + kt * 2];
-            a.y = LA[row_local * 9 + t * 4 + kt * 2 + 1];
+            v2i a; a.x = LA[row_local * 12 + t * 4 + kt * 2];
+            a.y = LA[row_local * 12 + t * 4 + kt * 2 + 1];
             for (int i = 0; i < NT; ++i) {
                 v2i b; b.x = LB[(t * 4 + kt * 2) * 128 + i * 16 + col];
                 b.y = LB[(t * 4 + kt * 2 + 1) * 128 + i * 16 + col];
@@ -130,7 +130,7 @@ def pack_transposed(t):
                         out[word, :] |= ((t[:, k].t().long() & 0xF) << (4 * j))
     return out.to(torch.int32).contiguous()
 
-SHARED = 2 * 1600 * 4
+SHARED = 2 * 1792 * 4
 def launch(fn, grid, args_list, shared=SHARED):
     torch.cuda.synchronize()
     storage = [ctypes.c_void_p(t.data_ptr()) if torch.is_tensor(t) else ctypes.c_int32(t)
