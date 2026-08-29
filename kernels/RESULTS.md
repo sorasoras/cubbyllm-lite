@@ -131,3 +131,22 @@ can verify any candidate layout in minutes). Until then, the int4
 effective MMA rate on RDNA4 is ~int8 rate (~332 TOPS), and v4
 (80-83.5 TFLOPS exact, ~5x fp32, 52% of int8) is at ~25% of the true
 VOP3P-corrected peak — consistent with a first-generation kernel.
+
+## FINAL DECODE (90%): the K=32 builtin is TWO packed 16x16x16 dots
+
+Probe evidence (P1-P5 + all-ones D=16): the `16x16x32_iu4` builtin
+computes TWO independent 16x16x16 int4 dots:
+- a.x = fragment of tile 0 (k 0-15), a.y = fragment of tile 1 (k 16-31)
+- acc[j] = lo16: tile-0 partial | hi16: tile-1 partial (packed pairs)
+- P1/P3: single B nibble affects 8 even/odd k positions per tile —
+  the per-tile fragment layout is the K=16 H1/H3 mapping, replicated.
+Correct usage: compute both tiles and COMBINE (add the two K=16 results,
+unpacking the packed acc pairs), i.e. 2 WMMA calls per 32-k with a.x/a.y
+split as separate K=16 fragments — NOT one call treating v2i as 32
+contiguous k. The remaining 10%: exact per-tile lane map for the packed
+acc pairs (decode via the same nibble-probe on the acc readback).
+
+Verified deliverable unchanged: v4 at 80-83.5 TFLOPS exact (5x fp32).
+The K=32 form's real value: 2x MACs per instruction issued (both tiles
+per call) IF the packed-pair accumulate is handled — the path to >=130
+TFLOPS stands, blocked only on the acc pair unpack/combine detail.
