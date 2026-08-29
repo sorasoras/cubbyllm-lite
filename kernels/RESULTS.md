@@ -295,3 +295,15 @@ throughput via OTHER levers: (a) 2 CTAs/CU occupancy tuning, (b) NT=8
 with KCW=4 (double the N-tiles per 32-k chunk), (c) K=32 builtin calls
 with the fragment layout treated as TWO K=16 fragments per v2i (the
 a.x/a.y as separate K=16 fragments, 2 calls per 4-word pair).
+
+## KCW=4+NT=8: error STILL 23.0 — identical across all chunk geometries
+
+The 23.0 error is invariant to KCW (4 vs 8), B LDS stride (64 vs 128),
+t-loop structure (1 vs 2 calls), and A LDS stride (9 vs 12). The
+fragment consumption semantics of the K=32 builtin at NT=8 are the
+remaining unknown — the per-nibble probe confirmed the D-store mapping
+(A lane l -> m=l%16, k-block=l/16; B lane l -> n=l%16) and the
+all-ones count (16 k per (m,n)), but the full nibble-to-(m,n,k) map
+at NT=8 needs the complete 512-position sweep with per-tile B
+readout (the committed tile_bisect.py + nibble_probe.py harnesses).
+VERIFIED DELIVERABLE: v4 — 80-83.5 TFLOPS, exact, ~5x fp32.

@@ -20,7 +20,7 @@ typedef unsigned int uint32_t;
 typedef int v2i __attribute__((ext_vector_type(2)));
 typedef int v8i __attribute__((ext_vector_type(8)));
 #define NT 4
-#define KCW 8
+#define KCW 4
 #define WARPS 4
 // A: (M, Kw) packed; Bt: (Kw, N) packed-transposed
 // grid: (N/64, M/64), block: 32 x 4 (lane, warp)
@@ -29,7 +29,7 @@ extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
                                       const float* __restrict__ scale,
                                       float* __restrict__ Out,
                                       int M, int N, int Kw) {
-    extern __shared__ int lds[];   // 2 bufs x (64*9 A-pad + 8*64 B) ints
+    extern __shared__ int lds[];   // 2 bufs x (768 A + 512 B) ints
     int n0 = blockIdx.x * 64;
     int mb = blockIdx.y * 64;
     int lane = threadIdx.x & 31;
@@ -39,7 +39,7 @@ extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
     for (int i = 0; i < NT; ++i) acc[i] = {};
 
     auto load = [&](int kw, int buf) {         // kw in words; chunk = 8 words (64 k)
-        int* LA = lds + buf * 1792;
+        int* LA = lds + buf * 1280;
         int* LB = LA + 768;
         for (int w = threadIdx.y * 32 + lane; w < 64 * 9; w += 128) {
             int r = w / 9, q = w % 9;
@@ -61,19 +61,17 @@ extern "C" __global__ void gemm_i4_v4(const uint32_t* __restrict__ Ap,
         int row_local = warp * 16 + col;
         // KCW=8 words = 64 k = 4 K=16 sub-tiles; the builtin consumes a.x
         // (16 k per wave via the lane-group split) -> 4 calls per chunk
-        // two K=32 calls per 64-k chunk; interleaved fragments (confirmed layout)
-        for (int t = 0; t < 2; ++t) {
-            v2i a; a.x = LA[row_local * 12 + t * 4 + kt * 2];
-            a.y = LA[row_local * 12 + t * 4 + kt * 2 + 1];
-            for (int i = 0; i < NT; ++i) {
-                v2i b; b.x = LB[(t * 4 + kt * 2) * 128 + i * 16 + col];
-                b.y = LB[(t * 4 + kt * 2 + 1) * 128 + i * 16 + col];
-                v8i r = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a, 1, b, v8i{}, 0);
-                for (int j = 0; j < 8; ++j) {
-                    int lo = (r[j] << 16) >> 16;   // sign-extend lo16
-                    int hi = r[j] >> 16;           // sign-extend hi16
-                    oacc[i][j] += (float)lo + (float)hi;
-                }
+        // one K=32 call per 32-k chunk (4 words); interleaved fragments
+        v2i a; a.x = LA[row_local * 12 + kt * 2];
+        a.y = LA[row_local * 12 + kt * 2 + 1];
+        for (int i = 0; i < NT; ++i) {
+            v2i b; b.x = LB[(kt * 2) * 128 + i * 16 + col];
+            b.y = LB[(kt * 2 + 1) * 128 + i * 16 + col];
+            v8i r = __builtin_amdgcn_wmma_i32_16x16x32_iu4_w32_gfx12(1, a, 1, b, v8i{}, 0);
+            for (int j = 0; j < 8; ++j) {
+                int lo = (r[j] << 16) >> 16;   // sign-extend lo16
+                int hi = r[j] >> 16;           // sign-extend hi16
+                oacc[i][j] += (float)lo + (float)hi;
             }
         }
         __syncthreads();
@@ -130,7 +128,7 @@ def pack_transposed(t):
                         out[word, :] |= ((t[:, k].t().long() & 0xF) << (4 * j))
     return out.to(torch.int32).contiguous()
 
-SHARED = 2 * 1792 * 4
+SHARED = 2 * 1280 * 4
 def launch(fn, grid, args_list, shared=SHARED):
     torch.cuda.synchronize()
     storage = [ctypes.c_void_p(t.data_ptr()) if torch.is_tensor(t) else ctypes.c_int32(t)
