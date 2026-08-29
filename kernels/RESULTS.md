@@ -688,3 +688,14 @@ generation).
     # Verify: "max|err| = 1.0 (fp-boundary int8 truncation class)"; int8
     # outputs scaled by 1/128 (per-tensor scale, quantized hand-off).
     # Optimal launch: P=84 (3 CTAs/CU x 28 CUs), block 32x16, 18.4? -> see SHARED in file.
+
+## GOAL PARKED (user decision)
+The 80%-of-int4-peak target is PARKED until a toolchain with
+async-copy/DSMEM/TMA-class mechanisms (or different hardware) becomes
+available. Deliverable in the meantime: v19 (261.4 TFLOPS, 39.4%).
+Resume conditions and the full lever map are in this file.
+FUTURE AVENUE (unexplored, recorded for the resume): the sparse 2:4
+int4 SWMMAC path measured at 1138.4 TOPS in mmapeak (1.7x dense) —
+requires 2:4 weight sparsification (plausible for ES-allocated MoE
+weights) and a new sparse-fragment kernel; a fresh campaign with model-
+quality validation.
