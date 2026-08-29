@@ -739,3 +739,20 @@ it does NOT yet give the producer/consumer SUBSET sync v24 needs. The
 remaining question: whether s_barrier_join <id> selects independent
 barrier subsets (matrix rows for init/join still to run — probe
 script supports them). v24 viable only if join-IDs give split groups.
+
+## JOIN-ID PROBE: subset barriers DO NOT EXIST on gfx1201 — v24 NO-GO
+probe_join.py (2-warp ordering test, hang-safe timeouts):
+- join 0 / join 0 (no init): ORDERED (full barrier works via join)
+- join 0 / join 1 (no init): STILL ORDERED — different join IDs do NOT
+  split warps into independent barrier groups; the signal -1/wait -1
+  form syncs the entire CTA regardless of join.
+- s_barrier_init N: REJECTED by hiprtc's integrated assembler (the
+  earlier llvm-mc acceptance was generic-mode only; the target check
+  refuses it) — same class as plain s_barrier.
+CONCLUSION: the gfx1201 barrier family offers nothing beyond a
+whole-CTA __syncthreads-equivalent (signal -1 + wait -1, decoded
+earlier). No producer/consumer subset sync exists -> v24 warp
+specialization is definitively a NO-GO on this hardware. The named-
+barrier avenue — the last identified resume lever — is now measured
+dead, closing the sync dimension exactly as the async-copy dimension
+already was. v19 (261.4 TFLOPS, 39.4%) remains the deliverable.
