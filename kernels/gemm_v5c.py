@@ -167,11 +167,22 @@ if __name__ == "__main__":
     A_np = A_tok.cpu().numpy().astype(np.float32)
     W_np = W_all.cpu().numpy().astype(np.float32)
     err = 0.0
+    per_block = []
     for eid in range(E):
         base, rows64, n_e = seg_base[eid]
         ref = A_np[base:base+n_e] @ W_np[eid*N:(eid+1)*N].T
-        err = max(err, np.abs(Out_np[base:base+n_e] - ref).max())
-    print(f"v4 grouped MoE (T={T}): sync={s1} memcpy={s2}  max|err| = {err:.1f}  {'PASS' if err == 0 else 'FAIL'}", flush=True)
+        d = np.abs(Out_np[base:base+n_e] - ref)
+        err = max(err, d.max())
+        per_block.append((eid, base, n_e, int((d > 0).sum()), int(d.size)))
+    print(f"v5c grouped MoE (T={T}): sync={s1} memcpy={s2}  max|err| = {err:.1f}  {'PASS' if err == 0 else 'FAIL'}", flush=True)
+    for eid, base, n_e, nbad, ntot in per_block:
+        if nbad:
+            d = np.abs(Out_np[base:base+n_e] - W_np[eid*N:(eid+1)*N].T[0]*0 + 0)
+            badmask = (np.abs(Out_np[base:base+n_e] - A_np[base:base+n_e] @ W_np[eid*N:(eid+1)*N].T) > 0)
+            ii = np.argwhere(badmask)[:5]
+            for r, c in ii:
+                print(f"  e{eid} Out[{base+r},{c}] = {Out_np[base+r,c]:.0f} ref={A_np[base+r] @ W_np[eid*N:(eid+1)*N].T[c].sum() if False else (A_np[base+r].astype(np.float64) * W_np[eid*N+c]).sum():.0f}", flush=True)
+            print(f"  e{eid}: {nbad}/{n_e*1} rows x cols wrong; bad cols sample: {sorted(set(cc for _, cc in ii))[:12]}", flush=True)
 
     gflop = 2 * T * K * N / 1e9
     t_moe = bench(moe_launch)

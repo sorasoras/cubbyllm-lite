@@ -1,0 +1,10 @@
+B-nibble mapping (lane, word, nib) -> (n, k_lo, k_hi):
+  B lane0 w0: j0:n0,k2,0 | j1:None | j2:None | j3:None | j4:None | j5:None | j6:None | j7:None
+  B lane0 w1: j0:n0,k1,0 | j1:None | j2:None | j3:None | j4:None | j5:None | j6:None | j7:None
+  B lane1 w0: j0:n1,k2,0 | j1:None | j2:None | j3:None | j4:None | j5:None | j6:None | j7:None
+  B lane1 w1: j0:n1,k1,0 | j1:None | j2:None | j3:None | j4:None | j5:None | j6:None | j7:None
+A-nibble mapping (lane, word, nib) -> (m, k_lo, k_hi):
+  A lane0 w0: j0:m0,k1,0 | j1:None | j2:None | j3:None | j4:None | j5:None | j6:None | j7:None
+  A lane0 w1: j0:m0,k1,0 | j1:None | j2:None | j3:None | j4:None | j5:None | j6:None | j7:None
+  A lane1 w0: j0:m1,k1,0 | j1:None | j2:None | j3:None | j4:None | j5:None | j6:None | j7:None
+  A lane1 w1: j0:m1,k1,0 | j1:None | j2:None | j3:None | j4:None | j5:None | j6:None | j7:None

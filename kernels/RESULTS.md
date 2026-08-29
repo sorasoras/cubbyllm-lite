@@ -170,3 +170,17 @@ harness is committed and takes ~2 min per 64-position sweep).
 VERIFIED DELIVERABLE: v4 — 80-83.5 TFLOPS grouped MoE, exact, ~5x fp32,
 native K=32-form int4 WMMA. The int4-vs-int8 compute question on RDNA4
 resolves as: int4 ≈ int8 MMA rate (int4's advantage = 4x compression).
+
+## Per-nibble probe data (lanes 0-1): k-interleaved across D-rows
+
+Key probe result (P1): B nibble (lane0, w0, j0)=1 with A[m][k] = k+1 ramp
+gives D[m][0] = 1, 3, 5, ..., 15 for m = 0..7 — i.e. the fragment position
+pairs with host-k = 2m for output-row m. The K=32 builtin's fragment
+layout is k-INTERLEAVED ACROSS OUTPUT ROWS (VOP3P packed-half structure),
+not row-contiguous as any standard interpretation assumes. This is why
+all four row-major-host-packed fix attempts failed: the hardware's
+expected A/B fragment layout requires repacking the host data into the
+k-interleaved order BEFORE the LDS stage (or loading with a de-interleave
+in the fragment read). Full lane0-1 sweep data: nibbleprobe_lane01.log.
+Next session: extend the sweep to all 32 lanes, derive the complete
+host-layout -> fragment transform, rebuild the packer, verify, benchmark.
