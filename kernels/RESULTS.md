@@ -41,7 +41,7 @@ K=32 dense standalone: exact, 34.9-35.7 TFLOPS. LDS bank-conflict padding
 | T | int4 v4 grouped MoE | TFLOPS | vs fp32 | vs int8 | % of 663.5 TOPS peak |
 |---|---|---|---|---|---|
 | 4096 | 0.223 ms | **57.8** | **4.15x** | 0.53x | 8.7% |
-| 16384 | (see commit log) | | | | |
+| 16384 | 0.617 ms | **83.5** | **5.07x** | 0.51x | 12.6% |
 
 v4 = 128 threads/block (4 warps), 64x64 output tile: 4 M-tiles share one
 LDS load (4x less B traffic), padded A stride. Exact at T=4096.
