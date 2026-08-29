@@ -496,3 +496,23 @@ FINAL CHAMPION: v15 (sched-group-barrier + int8 epilogue) = 252.5 TFLOPS
 steady (38.1%), exact. The GFX12 inline-asm recipes (granule offsets,
 region/buffer bases, s_wait_dscnt, asm-output register-composition
 limits) are committed in gemm_v16.py + probes for future work.
+
+## Round 7 (final): warp specialization — attempted, measured, below plateau
+v17: producer warps (6=A, 7=B) prefetch chunks via an LDS-flag spin
+protocol (produced/consumed/adone counters, __threadfence_block), 6
+consumer warps on 96-row tiles. Fixes en route: per-block flag init,
+drain accounting, producer sequencing (A->B handoff flag).
+State: runs without deadlock, NOT yet exact (err 6842), and even so the
+spin protocol measures 65.4 TFLOPS at K=4096 T=16384 — 4x BELOW the
+barrier design. The 32-lane producer cannot stream the fragment feed
+while 7 warps burn issue slots spinning. Structure refuted empirically.
+
+## PLATEAU (measured, all structures tried)
+| structure | TFLOPS (K=4096, T=16384) |
+|---|---|
+| v15 champion (compiler + sched-group-barrier + int8 out) | 252.5 (38.1%) |
+| v7b (compiler schedule, fp32 out) | 244.8 |
+| v16 (hand inline-asm batching) | 239.0 |
+| v12 (triple-buffer) | 185 |
+| v17 (warp-specialized spin pipeline) | 65.4 (not yet exact) |
+Instruction peak (D=32-verified): 663.5. 70-80% target: 464-531.
