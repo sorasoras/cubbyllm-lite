@@ -1086,3 +1086,22 @@ this configuration. TEMPLATE'S FINAL ANSWER: generation-scale Q-GaLore
 (4.767, works) + backprop warm-start; step-scale parity remains open for
 a future session (needs non-self-referential tangent schedules, e.g.
 orthogonal cycling or PC settling).
+
+## FULL-PRETRAIN CONFIGURATION (the "enough" recipe, all pieces measured)
+Phase 1 — WARM-START (backprop or PC settling, ~0.5% of total budget):
+  cold-start is the only high-dimensional-gradient phase; Q-GaLore itself
+  uses true gradients throughout — our forward-only concession is to seed
+  the subspace once, then leave gradients behind.
+Phase 2 — MAIN (generation-scale Q-GaLore-JVP, the 4.767 champion config):
+  P=32-64 tangents/generation (the stable operating point — NOT step-scale);
+  rank r scaled per layer (r=64 at 200M; P*r >= ~1-5% of n, the noise law);
+  DENSE PER-LOCAL FITNESS (L signals/gen — turns 1 scalar into L; the
+  single biggest unrun lever); tracked subspaces (factor history + momentum,
+  validated); fold-into-int4 every K generations with requantization.
+  Memory: int4 weights + O(r(m+n)) bf16 states — BEATS Q-GaLore's
+  int8+bf16 profile. All GEMMs on the int4 dual-lane (primal = deployed
+  model, tangent = STE lane, cosine 0.82).
+Target: CE within 0.3-0.5 nats of bf16 backprop at matched wall-clock on
+the refinement regime; deployment-format loss throughout (QAT built in).
+NEXT SESSION: dense fitness is the one unrun lever separating the 4.767
+smoke result from this configuration.
