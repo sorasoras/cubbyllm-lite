@@ -1003,3 +1003,18 @@ Experimental forward-only pretraining, first run results (tinyshakespeare,
   (ternary activations exact in int4; weight quantization dominates).
 Open next steps: per-layer dense fitness, learned tangent subspaces,
 larger model/population, Adam on the JVP estimate.
+
+## INT4 DUAL-LANE (kernels/dual_int4.py) — the fully-int4 training gate: PASSED
+Primal GEMM + tangent GEMM (STE, E = EGGROLL rank-8 direction, dy = E·x
+on the primal activations) BOTH through the gfx1201 int4 WMMA kernel:
+  exact fp32 JVP dL/dE : -0.0155
+  int4 dual-lane       : -0.0029
+  lane cosine          : 0.821  <- usable descent direction (SGD-noise scale,
+                                 sign preserved; momentum averages the noise)
+Fully-int4 backprop-free training is therefore implementable as the
+4-forward budget with both lanes on the 261-TFPS kernel: primal = deployed
+int4 model (QAT built in — training optimizes the deployed loss directly),
+tangent = int4 STE lane. High precision survives only in the loss scalar
+and the O(r(m+n)) update accumulation. Next: wire the dual lane into
+jvp_eggroll.py's FFN (2 kernel calls/layer) and run the CE-vs-backprop
+tax curve at matched wall-clock.
