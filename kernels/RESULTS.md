@@ -778,3 +778,228 @@ path by 4.1x and the vendor fp16 path by 2.5x. The 261.4 TFLOPS (39.4%)
 plateau is VALIDATED as far beyond vendor offerings, not a sign of a
 weak kernel. No MXFP4/fp4 GEMM exposed in the 7.9 bench on RDNA4
 (precision options stop at i8_r).
+
+## ROUND 13: offline hip-clang A/B — BYTE-IDENTICAL codegen; toolchain lever CLOSED
+
+Tested the "compile v19 with the full offline hip-clang/lld toolchain instead
+of hiprtc" lever (Round-4 follow-up + the newer-codegen/launch_bounds/logs/
+assembler-surface hypotheses).
+
+Toolchain: the rocm-venv's own _rocm_sdk_core 7.14 SDK — lib/llvm/bin/amdclang.exe
+(AMD clang 23.0.0git, ROCm/llvm-project 46fcb33), the SAME LLVM family behind
+hiprtc0714.dll. (TheRock 7.9 is an OLDER compiler than 7.14 — not the
+direction; the 3.2 GB tarball stays parked.)
+
+Pipeline (gemm_v19_ab.py, reusable): amdclang --hip-path=SDK -x hip
+--offload-arch=gfx1201 --cuda-device-only -O3 -D__HIPCC_RTC__=1 -> lld ->
+clang-offload-bundler -> hsaco -> hipModuleLoadData through the same ctypes
+harness. -D__HIPCC_RTC__ avoids the MSVC <cmath> isgreater-overload conflict
+on this box (MSVC 14.51); _rtc_shim.h supplies the four identifiers hiprtc
+injects (threadIdx/blockIdx/gridDim/__syncthreads) with verbatim SDK semantics
+(fence release workgroup + s_barrier + fence acquire workgroup).
+
+RESULTS:
+- Code objects: hiprtc and amdclang emit BYTE-IDENTICAL moe_v19 disassembly
+  (diff of the full symbol disasm = empty). Kernel metadata identical:
+  vgpr=113 sgpr=46 vgpr_spill=0 sgpr_spill=0 wave=32. (Supplements the old
+  "~105 VGPRs" note: readelf-exact is 113.)
+- Perf (K=4096 T=16384, best-of-8x40 at the sharp points): P84 hiprtc 259.7 /
+  clang 250.2 (identical binaries — delta is run-order/thermal noise);
+  equal-order first sweep gave 234.7 vs 234.9 (0.1%). P168 253.5/249.1,
+  P224 248.3, P192 233.4, P128 229.0. K=768: 216.4 vs 218.2. All correctness
+  PASS (err=1.0, fp-boundary truncation class).
+- __launch_bounds__(...) does NOT parse in offline -x hip mode (parsed as an
+  identifier -> declarator error) — hiprtc's accept-and-ignore (Round 3) is
+  consistent with a macro-void in its injected header. The AMDGPU-native
+  attributes (amdgpu_flat_work_group_size(512,512), amdgpu_waves_per_eu(2))
+  ARE honored (metadata maxflatWG 1024->512, +2 instrs) but are NOT levers:
+  VGPRs stay 113/0 spills (no pressure to trade), perf within noise (wpe2
+  248.5 at P84, slightly below champion).
+- CU-count correction: hipDeviceGetAttribute(22) returns 64 today. The
+  committed gemm_v19.py default P=2*n_cus()=128 is a measured LOCAL MINIMUM
+  (229); P=84 remains the sharp optimum (reproduced 259.7). The old
+  "28 CUs / 3 CTAs/CU" note does not match the attribute today. Run-book:
+  pass P=84 explicitly (or change the script default).
+
+VERDICT: the "compiler interleave is optimal" conclusion (Round 4) is now
+toolchain-independent — the plateau is the kernel+ISA, not the compile path.
+Offline compile is CLOSED as a performance lever but KEPT as infrastructure:
+-### job dumps, real diagnostics, msgpack notes via llvm-readelf -n,
+arbitrary __attribute__ experiments, and the -Wa assembler-flag surface for
+future asm work. Remaining levers are source-level: the int4-packed epilogue
+(the 64 global_store_b8/lane are directly visible in the disasm), SWMMAC 2:4,
+the decode-shape dot8 kernel, GPU-side tile tables.
+
+FILES: gemm_v19_ab.py (A/B driver), _ab_followup.py (metadata/ISA/P-grid
+pass), _rtc_shim.h, _load_test.py, _ab_*.{cpp,hsaco,asm} artifacts.
+
+## ROUND 14: int4-packed epilogue (v25) — LDS-scratch transpose; the real win is the pipeline, not the write path
+
+Lever (from the Round-13 close-out list): replace the 64 byte-stores/lane
+int8 epilogue with packed-int4 output in the next layer's pack() format
+(word (r,w) = cols 8w..8w+7, nibble i = col 8w+i). Two variants in
+gemm_v25.py, both CORRECT (err = 0.0 — the int8 gate's fp-boundary class
+disappears under clamp + power-of-2 scale 1/256):
+
+- v25a (ds_bpermute transpose, 8 exchanges per word): 0.69-0.89x — the 64
+  convergent ds_bpermute ops cost more than the write savings. GOTCHA
+  recorded for the future: ds_bpermute's lane argument is a BYTE offset
+  (lane << 2), per the SDK's own __shfl lowering (amd_warp_functions.h:129).
+- v25b (LDS-scratch transpose) — the keeper: each lane packs its 8 accs into
+  a column-word (nibble j = its column, row j), stores 8 words into the idle
+  post-k-loop double buffer (slot = warp*256 + ng*32 + kt*16 + l16 — fits
+  the 16.4KB LDS exactly), ONE barrier, then each lane gathers 8 consecutive
+  dwords as 2x ds_read_b128 (broadcast across the 8 r-lanes of a half-band;
+  compiler pairs the stores into 4x ds_store_2addr_b32) and assembles its
+  output word. 20 LDS instr/lane/tile. ISA: 64 global_store_b8 -> 8
+  global_store_b32 under one s_clause; clamp fused to v_med3_i32; nibble
+  place/extract fused to v_and_or/v_or3. vgpr 113->116, spills 0.
+
+PERF (T=16384, best-of-8x40):
+  K=768  P84: 1.032x (233.0 vs 225.8)  P168: 1.005x
+  K=4096 P84: 0.975x                  P168: 1.025x  (wash, 248.8 vs 252.0)
+The +3% at the realistic shape replicated across 3 independent runs.
+
+FINDINGS:
+1. The GEMM was NOT write-bound after all: halving the write bytes buys only
+   ~3% at K=768 — the plateau's binding constraint remains the k-loop
+   structure (consistent with Rounds 4/13). The "write ceiling" reading of
+   Round 9 was the int8 epilogue's sector waste + store count, which this
+   fixes, but it was not the dominant term.
+2. THE REAL WIN IS PIPELINE-LEVEL: v19's int8 output must be repacked to
+   int4 for the next W4A4 layer. Measured torch pack() tax: 3.6 ms per
+   layer-call — 15x the GEMM itself. v19+repack = 13.4 effective TF at
+   K=768 vs v25b's 233.0 = 17.4x pipeline speedup (4.2x at K=4096). Even
+   with a hypothetical optimal repack kernel (~90us = 53MB traffic at HBM
+   rate), v25b still nets ~1.35x at K=768 and deletes a kernel+launch.
+3. Epilogue recipe on gfx1201 for any WMMA D-layout like ours (lane -> 8 rows
+   x 1 col): the LDS-scratch b128-gather transpose, NOT ds_bpermute, NOT
+   byte stores. The scratch exactly reuses the double buffer.
+
+VERDICT: v25b = the pipeline deliverable (parity-or-better GEMM, half the
+write traffic, zero repack, int4 activations handed off natively). v19
+remains the standalone benchmark champion. Remaining open levers: SWMMAC
+2:4 (1138 TOPS), decode-shape dot8 kernel, GPU-side tile tables,
+per-channel scales folded into the consumer's B for int4-out quality.
+
+## ROUND 15: SWMMAC idx metadata DECODED + VERIFIED (probe: swmmac_probe.py)
+
+The idx-decode probe (nibble_probe methodology: one warp, one SWMMAC call per
+launch, host-crafted fragments, offline analysis) fully decoded and VERIFIED
+the 2:4 metadata of __builtin_amdgcn_swmmac_i32_16x16x64_iu4_w32 on gfx1201.
+All findings probe-measured; S8/S9 verified against numpy expanded-dot
+references (err=0.0 across 6 seeds).
+
+FRAGMENT LAYOUTS (same conventions as the dense iu4 WMMA):
+- A (sparse, i32x2 = 16 stored nibbles/lane): lane l -> row m = l%16,
+  k-block = l/16 (lanes 16-31 hold k 32..63). 16 rows x 32 stored = 2:4 of
+  K=64; two lanes feed each row (one per k-block).
+- B (dense, i32x4 = 32 nibbles/lane): lane l -> column n = l%16,
+  k-block = l/16; nibble kk <-> k = 32*block + kk (linear).
+- D (i32x8): D[l][j] = (m = (l>>4)*8 + j, n = l&15).
+
+idx ENCODING (the deliverable):
+- The 16 stored A-nibbles form 8 ADJACENT PAIRS: pair t = linear positions
+  (2t, 2t+1), i.e. nibbles (2j, 2j+1) within each 8-nibble word.
+- Pair t owns a 4-wide k-group = B-nibbles {4t..4t+3} of the lane's 32-k
+  block.
+- idx (32 bits) = 8 fields of 4 bits: field t bits [4t+1:4t] = group position
+  (0..3) of stored nibble 2t; bits [4t+3:4t+2] = position of nibble 2t+1.
+- NATURAL 2:4 = 0x44444444 (slots -> group positions {0,1}). Any of the 6
+  2-subsets per pair; arbitrary selectors also legal — collisions ADD,
+  dead group positions are zero.
+- idx=0 is the DEGENERATE pattern: both nibbles of every pair multiply group
+  position 0 (duplicated and summed — S0's D=32 is 16 k's x 2). This is the
+  trap behind CK's composable_kernel#3753 bug class: canonical fixed-slot
+  test data + idx assumptions.
+- idx IS PER-LANE (VGPR): changing lane i's idx changes only row i. Real
+  per-row 2:4 patterns work.
+- neg_a/neg_b/clamp are COMPILE-TIME constants (hiprtc: "must be a constant
+  integer" — immediates in the instruction encoding). clamp=true does NOT
+  saturate the i32 accumulator (D=32/64 pass through); purpose TBD.
+- S9 END-TO-END RECIPE (proven as a system): A lane kb*16+m: slot 2t <-
+  value of row m's group-(8kb+t) first live position, slot 2t+1 <- second;
+  idx field t = pos1 | pos2<<2; B lane kb*16+n: nibble kk <-> k = 32kb+kk.
+
+IMPLICATIONS FOR THE SPARSE CAMPAIGN (v26+):
+- The 1138.4 TOPS path is fully specified: 2:4 weights at 2 bits/weight
+  effective, per-row idx tables, dense-B staging unchanged.
+- No hardware pattern validation: EGGROLL born-2:4 experts pack losslessly;
+  pruning-based flows must guarantee exactly-2-live-per-group (or exploit
+  collisions deliberately).
+- Remaining for v26: port the v19 skeleton (A tile halves in LDS -> more
+  occupancy headroom; idx staged alongside A), benchmark vs the 663.5
+  dense plateau at 2x expanded accounting.
+
+FILES: kernels/swmmac_probe.py — all stages reproducible:
+python swmmac_probe.py 0,2,3,5,6,7,8,9
+
+## ROUND 16: v26 — SWMMAC 2:4 SPARSE grouped MoE: 1.55-1.70x over v19; the parked wall breaks by changing the roofline
+
+First sparse kernel built on the Round-15 decoded idx recipe (gemm_v26.py).
+Role flip vs v19: the sparse A operand = WEIGHTS (2:4 int4, per-row patterns
+via per-lane idx); the dense B operand = ACTIVATIONS, read DIRECTLY from
+global (one v4i per lane per 64-k chunk, reused across all 8 ng —
+activations have zero cross-warp reuse, so no LDS staging at all). LDS =
+weights-only double buffer: 128 features x 6 words (4 val + 2 idx) = 3 KB
+per 64-k chunk, 6 KB total vs v19's 16.4 KB. D = 16 features x 16 tokens per
+(warp, ng); the epilogue writes Out[token, feature] and the compiler
+vectorized it to 8x global_store_b64 (vs v19's 64 byte-stores — the
+transposed D layout coalesces better).
+
+Wpack layout: (E, K/64, N, 6), per (feature, chunk) = [vals kb0, vals kb1,
+idx kb0, idx kb1] — fully coalesced staging; host packer vectorized
+(scatter_add of per-group nibble/idx contributions into per-block words).
+Activations Ap UNCHANGED from v19 (dense int4 packing — the B nibble kk <->
+k = 32*block + kk linear convention is identical, no repacking).
+
+Metadata: vgpr=100 sgpr=32 spills=0 (v19: 113/46/0), LDS 6144B.
+ISA chunk body: 8x v_swmmac_i32_16x16x64_iu4 + 4 ds_load_2addr_b64 +
+4 ds_load_2addr_b32 + 1 global_load_b128 + 2 global_load_b32.
+
+CORRECTNESS: err = 1.0 (fp-boundary truncation class) at K=768/4096 across
+seeds {0,1,7,12345}, with RANDOM PER-ROW 2:4 patterns (arbitrary positions —
+the CK #3753 regime, validated from day one).
+
+PERF (T=16384; first pass best-of-6x30, confirm best-of-8x40):
+  K=768:  v26 351-362 vs v19 218-226 -> 1.59-1.68x
+  K=4096: v26 368-390 vs v19 196-243 -> 1.55-1.70x
+  Peak 390.3 TFLOPS = 58.8% of the 663.5 dense peak (the dense campaign
+  plateaued at 39.4%), 34.3% of the 1138.4 expanded peak. The 1.715x
+  mmapeak issue-rate ceiling is essentially reached (measured 1.55-1.70,
+  noise band ~4%). vs the RECORDED v19 champion (261.4): 1.36-1.49x.
+  P-curve still jagged (P84 & P224 good, P112 dips).
+
+MEANING: the Round-12 "~260 TFLOPS measured-unreachable" plateau was the
+DENSE roofline. The sparse roofline is a different wall and the same
+skeleton class reaches ~390 on it. The model-side cost: weights are 2:4
+(3 bits/weight incl idx — 2 value bits + 1 idx bit per group of 4 — vs
+4.0 dense = 1.33x weight compression, NOT the naive 2x; a globally uniform
+pattern (idx=0x44444444 constant) drops storage to 2 bits/weight = 2.0x
+but fixes WHICH k-positions are live). The deal is sparsity for speed,
+exactly as designed. For the W4A4 pipeline this also stacks with (a) the
+v25b int4-packed epilogue (not yet ported to the transposed v26 D — TODO)
+and (b) the decode-side weight streaming win (0.75x bytes).
+
+OPEN for v26+: port the v25b packed-int4 epilogue; EGGROLL born-2:4
+experts (the packer is lossless for any per-row 2-of-4 selection);
+quality validation (zero-forgetting benchmark) for 2:4 experts; sparse
+decode dot8; GPU-side tile tables.
+
+FILES: kernels/gemm_v26.py (kernel + vectorized 2:4 packer + harness),
+_v26.hsaco.
+
+## JVP-EGGROLL PRETRAIN HARNESS (cubbylite/jvp_eggroll.py) — WORKING
+Experimental forward-only pretraining, first run results (tinyshakespeare,
+~100K-param 2-block spike-LM, 40 generations, matched forward budget):
+  FD-EGGROLL (antithetic, P=64):  CE 5.778 -> 5.159   (9.1 s)
+  JVP-EGGROLL (exact jvp, P=32):  CE 5.778 -> 5.109   (8.7 s)  <- better at
+                                  EVERY checkpoint AND faster
+  JVP advantage: torch.func.jvp gives exact directional derivatives through
+  the analog pass (no sigma, no FD noise); update g = -(1/P) sum d_i E_i,
+  EGGROLL rank-8 tangents, validated scale-free + decayed-step recipe.
+  INT4 FWD (trained weights through the gfx1201 int4 WMMA kernel, spike
+  FFN): quantized CE 5.320 vs analog 5.109 — quantization gap 0.210 nats
+  (ternary activations exact in int4; weight quantization dominates).
+Open next steps: per-layer dense fitness, learned tangent subspaces,
+larger model/population, Adam on the JVP estimate.
