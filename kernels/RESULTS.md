@@ -1043,3 +1043,13 @@ The warm-started tracked subspace starts 1.1 nats ahead (gen 0) and the
 i.i.d. baseline NEVER catches up. Confirms the hybrid thesis: structured
 signal seeds the subspace, forward-only ES refines it — the full Q-GaLore
 effect (SVD(G) projection) recovered without gradients in the loop.
+
+## Q-GaLore-JVP vs TRADITIONAL BF16 BACKPROP — the honest head-to-head
+Same model, data, wall-clock (7.1s): Adam backprop reaches CE 1.624 (258
+steps) vs Q-GaLore-JVP 4.767 (40 updates). Backprop dominates at this
+scale — per-UPDATE the ES methods are comparable (~0.026 vs ~0.013
+nats/update) but pay ~6x fewer updates/sec even with factor-search speed;
+the classic ES compute tax, measured. Q-GaLore-JVP's value is NOT speed:
+it is no-backward/no-autograd/no-activation-storage — on-chip adaptation,
+int4-in-the-loop, deployment-format training. Positioning unchanged and
+now quantified: backprop pretrains, forward-only stack owns adaptation.
