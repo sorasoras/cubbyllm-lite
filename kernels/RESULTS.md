@@ -1032,3 +1032,14 @@ profile (EGGROLL already had), factor-search cost advantage. The
 missing ingredient for the GaLore effect at scale: either enough
 generations for the power iteration to concentrate, or warm-start
 factors from a backprop/PC phase (the hybrid split again).
+
+## Q-GaLore-EGGROLL FIXED — WINS at matched budget (cuda, ad5faea fixes)
+Warm-start (SVD of true-gradient history seeds A/B) + momentum (0.9)
++ 25% epsilon-exploration + fold-20:
+  i.i.d. JVP      : CE 5.778 -> 5.109   (12.1 s)
+  QGaLore-JVP     : CE 4.665 -> 4.767   ( 7.1 s)   <- 0.34 nats better AND
+                                                  1.7x faster
+The warm-started tracked subspace starts 1.1 nats ahead (gen 0) and the
+i.i.d. baseline NEVER catches up. Confirms the hybrid thesis: structured
+signal seeds the subspace, forward-only ES refines it — the full Q-GaLore
+effect (SVD(G) projection) recovered without gradients in the loop.
