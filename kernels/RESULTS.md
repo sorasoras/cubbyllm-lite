@@ -1018,3 +1018,17 @@ tangent = int4 STE lane. High precision survives only in the loss scalar
 and the O(r(m+n)) update accumulation. Next: wire the dual lane into
 jvp_eggroll.py's FFN (2 kernel calls/layer) and run the CE-vs-backprop
 tax curve at matched wall-clock.
+
+## Q-GaLore-EGGROLL (cubbylite/qgalore_eggroll.py) — MEASURED, negative at this scale
+Ported Q-GaLore's usable core (persistent A/B factors, factor-space
+population, chain-rule tracking dA=gE@B^T, periodic fold) — no SVD, no
+gradient, full-rank-capable W over folds, faster per gen (7.4s vs 11.1s).
+VERDICT at 40-gen tinyshakespeare budget: CE 5.81->5.76 vs i.i.d. JVP
+5.78->5.11. The subspace-confinement only pays when the subspace is
+RIGHT — GaLore gets it from SVD(true gradient); chain-rule power
+iteration on random-init factors has not converged by this budget.
+Usable pieces confirmed: fold+requant mechanics, O(r(m+n)) memory
+profile (EGGROLL already had), factor-search cost advantage. The
+missing ingredient for the GaLore effect at scale: either enough
+generations for the power iteration to concentrate, or warm-start
+factors from a backprop/PC phase (the hybrid split again).
