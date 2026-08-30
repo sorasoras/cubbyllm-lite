@@ -1053,3 +1053,13 @@ the classic ES compute tax, measured. Q-GaLore-JVP's value is NOT speed:
 it is no-backward/no-autograd/no-activation-storage — on-chip adaptation,
 int4-in-the-loop, deployment-format training. Positioning unchanged and
 now quantified: backprop pretrains, forward-only stack owns adaptation.
+
+## 4-FWD BUDGET: first measurement — wall-clock parity CONFIRMED, tuning divergence
+True 4-fwd design (1 primal + 2 jvp tangents/step: momentum + exploration,
+warm-started factors): 572 steps in 7.1s vs Adam's 258 — 2.2x MORE steps,
+confirming the wall-clock-parity prediction. Warm-start reached CE 3.30 in
+20 Adam steps; the ES phase then DIVERGED (alpha=0.02 too aggressive for
+rank-2/step information — the P=32 run averaged 32 directions at alpha
+0.004). NOT a structural verdict: a tuning issue (needs alpha ~10x
+smaller + possibly per-step gradient clipping). Status: parity mechanism
+verified, stability untested at correct step size. Next run: alpha=0.002.
