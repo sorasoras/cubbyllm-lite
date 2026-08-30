@@ -1075,3 +1075,14 @@ reconstructions across ~20-50 steps into a low-rank buffer BEFORE the
 Adam application (delayed/batched update), or use plain momentum-SGD on
 the accumulated direction. Gap to bf16 (1.624) at wall-clock parity:
 NOT closed. Status: mechanism understood, buffering fix designed, not run.
+
+## 4-FWD v3 (accumulation buffer): FINAL — step-scale verdict
+32-step buffer + momentum + norm-clip: 995 steps @7.1s, CE 428.6 —
+divergence reduced 500,000x vs v1/v2 but basin not held (positive
+feedback: buffer->tangent->buffer self-reference). Per the plan's stop
+condition, three step-scale variants (raw/Adam/buffered) all fail -> the
+gap to bf16 at step-scale is STRUCTURAL for rank-1 forward-only info in
+this configuration. TEMPLATE'S FINAL ANSWER: generation-scale Q-GaLore
+(4.767, works) + backprop warm-start; step-scale parity remains open for
+a future session (needs non-self-referential tangent schedules, e.g.
+orthogonal cycling or PC settling).
