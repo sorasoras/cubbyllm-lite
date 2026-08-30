@@ -1105,3 +1105,58 @@ Target: CE within 0.3-0.5 nats of bf16 backprop at matched wall-clock on
 the refinement regime; deployment-format loss throughout (QAT built in).
 NEXT SESSION: dense fitness is the one unrun lever separating the 4.767
 smoke result from this configuration.
+
+## ANCHORED HYBRID (4-fwd + bwd): the K-curve MEASURED (cubbylite/hybrid_anchor.py)
+The hybrid: one true-gradient anchor every K generations (anchor = fold A@B
+into W -> one Adam step on W with clipped full gradient -> SVD(G) subspace
+re-seed), validated Q-GaLore-JVP generations in between; both phases write
+the same W_eff = W + A@B state. Protocol UPGRADED vs the 4.767 lineage:
+fresh minibatches + held-out eval -- the fixed-batch protocol is degenerate
+(Adam lr=0.01 memorizes the 4K-token batch to CE 0.02 in <2s, uninformative).
+20s matched wall-clock, single seed, reruns reproduce within ~0.005 nats.
+  adam-pure (5456 steps)      heldout CE 2.179
+  hybrid K=0  (449 anchors)   2.441   <- anchor-only control
+  hybrid K=1  (105g/104a)     2.543
+  hybrid K=2  (124g/61a)      2.571
+  hybrid K=5  (132g/26a)      2.607
+  hybrid K=10 (139g/13a)      2.907
+  hybrid K=20 (142g/7a)       3.504
+  hybrid K=50 (143g/2a)       2.977
+  hybrid K=inf (141g)         4.091
+FINDINGS:
+1. No hybrid beats pure backprop at this scale. The curve degrades with K:
+  the generation phase's marginal wall-clock value is NEGATIVE here -- one
+  generation (~131ms, P=32) displaces ~2.7 anchor steps (~45ms each) and
+  delivers less. The refinement-regime claim does not manifest at smoke
+  scale. K=0 (0.26 nats behind Adam on 8x fewer effective steps) is the
+  honest anchor-machinery tax at this scale.
+2. DESIGN LAW (measured): the anchor must leave A@B ~ 0. seed gamma=0.25
+  (A@B = 6.25% of G_r pending) DIVERGES at K=1 (CE -> NaN: the next fold
+  injects the re-seed as gradient ASCENT; same positive-feedback class as
+  4-fwd v3's buffer). gamma=0.02 vs 0.05: 2.543 vs 2.547 -- stable plateau,
+  insensitive once ~0. The warm-start A@B=G_avg offset is likewise a
+  liability under fresh batches (first fold applies it as ascent); hybrids
+  shrink it x0.1. Exploration tangents rescaled to factor magnitude to
+  keep the small-seed search balanced.
+3. K=20/50 inversion is real (deterministic): at K=20 the single-batch
+  SVD re-seed + momentum reset every 20 gens interrupts productive
+  generation tracking; at K=50 two late anchors still beat none (2.977 vs
+  4.091). Single-batch gradient re-seeds are noisy -- sparse anchors need
+  multi-batch gradient accumulation for the refresh.
+4. HALF-DEPTH ANCHOR WINS: backward only through last block + head (early
+  layers forward-only via generations), K=10: CE 2.773 vs 2.907 full-depth
+  -- reproducible, and the shape the EGGROLL paper itself proposes as
+  future work (local rules early, global updates for the readout). The one
+  lead from this campaign for scale-up.
+5. Selective (sorted) anchor: q=0.3 -> 3.034, q=0.5 -> 2.965 vs 2.907
+  full-batch. No help at this scale.
+6. CAVEAT: smoke scale is Python/sync-overhead-bound (Adam step 3.7ms,
+  anchor 45ms, generation 131ms), NOT GEMM-bound -- the asymptotic compute
+  ratio (33 int4 lanes @ 261 TFLOPS vs 3 fp16 lanes @ 105.5) is not what
+  this test exercises. The wall-clock premium here is machinery, not method.
+VERDICT: the anchored hybrid is STABLE (all K finite at gamma<=0.05; the
+pre-sweep GPU-SVD crash and the gamma=0.25 NaN were both the same law).
+At smoke scale backprop dominates and the generation phase does not earn
+its wall-clock; the structural prizes (int4-in-loop QAT, no activation
+storage on ~99% of compute, on-chip adaptation) remain untested at
+GEMM-bound scale. Best lead: half-depth anchoring.
