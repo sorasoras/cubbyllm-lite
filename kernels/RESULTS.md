@@ -1063,3 +1063,15 @@ rank-2/step information — the P=32 run averaged 32 directions at alpha
 0.004). NOT a structural verdict: a tuning issue (needs alpha ~10x
 smaller + possibly per-step gradient clipping). Status: parity mechanism
 verified, stability untested at correct step size. Next run: alpha=0.002.
+
+## 4-FWD v2 (fixed-basis tangents + Adam): 917 steps @7.1s — DIVERGED; mechanism found
+Second 4-fwd attempt (SVD-basis cycling tangents, Adam on the estimate,
+917 steps = 3.6x Adam's step count): diverges. ROOT CAUSE identified:
+Adam's per-coordinate v is ~zero in coordinates the current rank-1
+tangent does not touch -> m/sqrt(v) explodes there. Coordinate-adaptive
+optimizers REQUIRE dense gradient estimates; rank-1-per-step forward-mode
+cannot feed them directly. The correct structure: ACCUMULATE the JVP
+reconstructions across ~20-50 steps into a low-rank buffer BEFORE the
+Adam application (delayed/batched update), or use plain momentum-SGD on
+the accumulated direction. Gap to bf16 (1.624) at wall-clock parity:
+NOT closed. Status: mechanism understood, buffering fix designed, not run.
