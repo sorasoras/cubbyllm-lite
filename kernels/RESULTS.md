@@ -1288,3 +1288,26 @@ HONEST CHARACTERIZATION: the pure forward-only search plateaued at
   JVP-population machinery remains for any component not hand-derived
   (each random direction ~3 apps). Spectrum: pure JVP 2.768 -> vmap 2.616
   -> exact-guided 2.20-2.30.
+
+## STREAM CO-SCHEDULING PROBE (kernels/stream_overlap.py): NO OVERLAP — streams serialize
+Question: can a memory-bound kernel overlap with a machine-saturating int4
+GEMM on gfx1201/Windows-ROCm (hipRTC, ctypes streams)? The one measurement
+that decides the whole overlap family for the training stack.
+  gemm x10 (v4-class, M=16384 N=2048 K=4096)   : 26.5-26.9 ms (103.6 TFLOPS)
+  mem sweep (Adam-like read2/write1)           : 24.7 ms (553.7 GB/s, ~87% pin)
+  serial, single stream                        : 50.3-51.2 ms
+  overlapped, two streams, 5 runs              : 49.1-53.3 ms -> 0.96-1.04x = NOISE
+  mem-kernel-queued-first control              : 49.3-51.3 ms -> no dispatcher bias
+  half-M GEMM grid + sweep control             : 29.0-30.4 vs 28.7 serial -> none
+VERDICT: the dispatcher does NOT co-schedule a second kernel's blocks
+behind a full GEMM grid on this stack — concurrent kernels time-share by
+serialization. Status of the overlap family:
+  DEAD (measured): cross-stream overlap of optimizer/quantization with
+    GEMMs; stream-based sub-batch pipelining (same mechanism).
+  SURVIVES: (1) megakernel CTA-role specialization — the in-kernel path,
+    on our persistent-launch machinery + flag sync (v17 lineage; CTA-level
+    roles are fine, only warp-level subset barriers are absent);
+  (2) fusion of memory ops into the GEMM epilogue; (3) the (1+P)-lane
+    M-stacking (avoids the memory work per useful FLOP — already the
+    design); (4) batched optimizer passes (one Adam sweep per K updates).
+Caveat: Windows-ROCm/hipRTC behavior measured; other runtimes may differ.
