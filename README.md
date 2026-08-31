@@ -1,64 +1,100 @@
 # CubbyLite
 
-A dedicated, runnable mini-implementation of **[CubbyLLM](https://github.com/Grillcheese-AI/CubbyLLM)**'s
-central bet, built on the **[grilly](https://github.com/Grillcheese-AI/grilly)** Vulkan backend and the
-**EGGROLL backprop-free trainer** validated in-session.
+A runnable research repo for **backprop-free training of language models** —
+started as a mini-implementation of [CubbyLLM](https://github.com/Grillcheese-AI/CubbyLLM)'s
+central bet (context-conditioned weights, frozen routing, spike compute) and
+grown into a measured campaign spanning three questions:
 
-**Central bet (CubbyLLM):** make a model's active weights a function of context rather than a fixed
-stored state — the forgetting fix, the mechanism for automatic specialization, and the trick that
-scales the output vocabulary. This repo implements the load-bearing subset and tests it:
+1. **How fast can int4 compute go on RDNA4?** (a hand-written WMMA kernel)
+2. **Can forward-only (gradient-free) training match backprop?** (EGGROLL →
+   JVP → Q-GaLore → anchored hybrids, every claim measured against controls)
+3. **Is there an architecture where forward-only signals are enough?**
+   (the Hierarchical Reasoning Model substrate)
 
-| CubbyLLM pillar | CubbyLite implementation |
+Every result below is in [`kernels/RESULTS.md`](kernels/RESULTS.md) — the
+master log with mechanisms, negative results, and honest verdicts.
+
+## Headline results
+
+| campaign | result |
 |---|---|
-| Frozen router (online-learned routers forget themselves) | Multiplicative token-hash routing — zero routing parameters, allocation can never drift or collapse |
-| Training follows the router's allocation | EGGROLL low-rank ES trains experts only on their assigned slice; fitness = pure task loss |
-| Softmax-bypass output head | Cosine retrieval head against the tied embedding table |
-| Spike-efficient compute | K/V as ternary spike trains; shared expert always on |
-| Zero-Forgetting Stability Benchmark | Sequential correlated-domain training (plain → rot13 cipher), retention measured per domain |
+| INT4 WMMA GEMM (gfx1201, hipRTC) | **261.4 TFLOPS** = 39.4% of the 663.5 TOPS real peak, **4.1× AMD's own int8** (63.8), 2.5× their fp16 (105.5) |
+| JVP-EGGROLL vs finite-difference ES | exact directional derivatives (torch.func.jvp) beat FD — no σ, no antithetic noise |
+| Q-GaLore-EGGROLL (gradient-free subspace tracking) | CE 4.767 vs 5.109 i.i.d. at matched budget, **without any gradient in the loop** |
+| Forward-only vs backprop (transformer) | honest negative: ~2.4× worse per unit compute at GEMM-bound scale — the ES compute tax, measured |
+| Anchored hybrid (backprop anchor every K gens) | K-curve measured; γ=0.25 diverges by fold-ascent feedback (the design law: anchors leave A@B ≈ 0); half-depth anchoring beats full-depth |
+| **Backprop-free HRM (final)** | **CE 2.20–2.30 vs exact-gradient Adam's 2.360** at ~2000 matched updates, **0.98× its per-update compute** |
 
-## Architecture (≈300k params)
+## The final stack: gradient-exact training without backward machinery
 
-- 2 blocks × [spike self-attention (ternary K/V, causal) → frozen-hash top-1 of 7 routed experts + 1 shared expert]
-- char-level LM, context 64, ~65-char vocab, grilly Vulkan GEMMs for all matmuls
-- Training: EGGROLL ES — population 64, antithetic pairs, rank-8 factorized perturbations,
-  fitness-standardized scale-free update, decayed step. **No gradients, no STE, no backward pass anywhere.**
+The endpoint of the campaign ([`cubbylite/hrm_eggroll.py`](cubbylite/hrm_eggroll.py)):
+an HRM (two-timescale recurrent transformer, arXiv 2506.21734) trained with
+one-step gradients computed **entirely from forward operations on saved
+features** — no autograd, no stored graph, O(1) activation memory:
 
-## Results
+- the output error `e = (p − onehot)·W_head` is exact and forward-computable;
+- the error chain through `rms → w2 → gelu′ → w1 → rms → proj → attention →
+  embedding` uses only **symmetric Jacobians** (rms and softmax — their
+  transpose is themselves, so applying them is a forward matvec) and forward
+  matmuls;
+- verified: cosine **+1.0000 with the true gradient on all 9 weight keys**,
+  sustained through training, JVP-weighted (`d_g = ⟨∇, E⟩`);
+- the JVP population machinery remains for any component not hand-derived.
 
-### Zero-Forgetting Benchmark (`cubbylite/benchmark.py`)
+The measured spectrum of what each signal class buys: pure JVP population
+2.768 → vmap-batched 2.616 → exact forward-op chains 2.20–2.30 (Adam variant:
+2.360). The late-training advantage over plain Adam is mechanistically
+isolated: per-key gradient normalization drives Adam into its noise-robust
+sign regime.
 
-Sequential training, 100 EGGROLL generations per phase, correlated domains
-(rot13 = same alphabet, same language, shifted statistics):
+## Repo layout
 
-| Router | CE_A init | after A | after B | ΔA (forgetting) | CE_B gain | Expert balance |
-|---|---|---|---|---|---|---|
-| **hash (frozen)** | 7.80 | **3.38** | 3.89 | **+0.514** | **0.682** | 0.05/0.32 |
-| learned (quantile) | 7.80 | 3.47 | 3.99 | +0.526 | 0.633 | 0.11/0.17 |
-
-### Findings (honest ones)
-
-1. **The frozen router wins on everything it directly controls** — faster learning, better B
-   acquisition, zero router parameters, zero balancing machinery. Consistent with CubbyLLM.
-2. **But frozen routing alone does NOT prevent forgetting.** Both arms forget ≈equally (+0.51 vs
-   +0.53). At this scale the interference runs through the **shared substrate the router does not
-   partition**: the embedding table (which the retrieval head also reads), attention weights, and the
-   shared experts. This *sharpens* CubbyLLM's own claim — their fix is not frozen routing alone but
-   **context-conditioned parameter generation**; frozen routing is necessary, not sufficient.
-3. **Hash routing is not load-balanced under skewed token frequencies** (0.05/0.32): frequent chars
-   concentrate on one expert. Per-token-uniform ≠ per-instance-uniform. The learned quantile router
-   balances better (0.11/0.17) at a small CE cost. A frequency-aware frozen hash (or quantile-corrected
-   hash) is the obvious next variant.
+```
+cubbylite/           the training stack
+  hrm_eggroll.py      backprop-free HRM + 4-arm controlled comparison (the final work)
+  hybrid_anchor.py    anchored-hybrid K-curve harness (fresh-batch, held-out protocol)
+  qgalore_eggroll.py  Q-GaLore-EGGROLL: gradient-free subspace tracking
+  jvp_eggroll.py      JVP-EGGROLL + int4 dual-lane evaluation
+  eggroll.py          the original validated ES trainer
+  benchmark.py        frozen-router zero-forgetting benchmark (the origin)
+kernels/             the int4 WMMA kernel campaign
+  gemm_v19.py         the 261-TFLOPS champion (256×128 tiles, 16 warps)
+  RESULTS.md          the master log — every round, mechanism, and verdict
+results/              run logs
+```
 
 ## Run it
 
-```
-B:\git\grilly-venv\Scripts\python.exe cubbylite\benchmark.py    # ~5 min on RX 9070
+```bash
+# 4-arm controlled comparison (transformer-Adam vs HRM-Adam vs global-ES vs
+# backprop-free), fresh minibatches + held-out eval, matched wall-clock:
+QGAL_DEVICE=cuda python cubbylite/hrm_eggroll.py run
+
+# the anchored-hybrid K-curve:
+QGAL_DEVICE=cuda python cubbylite/hybrid_anchor.py sweep
+
+# the int4 GEMM benchmark (RX 9070 / gfx1201):
+python kernels/gemm_v19.py
 ```
 
-## Roadmap (maps to CubbyLLM hypotheses)
+Dependencies: PyTorch + a ROCm hipRTC runtime (TheRock dist works on
+Windows/gfx1201). The kernel campaign assumes an AMD RDNA4 GPU.
 
-- Route the embedding table and/or per-domain retrieval keys → attack the shared-substrate forgetting path
-- Fully disjoint-vocabulary ablation (isolate expert-partition interference from substrate interference)
-- Context-conditioned parameter generation: expert weights as a function of a frozen-router cluster embedding
-- VSA binding head via grilly `BlockCodeOps` (pillar not implemented here)
-- Scale: wider model, real tokenizer, EGGROLL rank/POP sweeps
+## Honest findings worth keeping
+
+- **Forward-only random search cannot match backprop on a standard
+  transformer** — not for tuning-lack: rank, population, decay, optimizer
+  and momentum were all swept; the information/cost arithmetic (2× per-update
+  value for 4.84× cost) is structural. Recorded as such.
+- **Post-norm is load-bearing** for weight-shared recurrence (unnormalized
+  and prenorm both explode; the HRM paper's recipe independently confirmed).
+- **Design law** (three independent confirmations): any update state derived
+  from quantities the update itself influences creates positive feedback —
+  pending updates must be ~zero at re-seed; search machinery must be
+  statistically independent of the state it writes.
+- **Fixed-batch smoke tests overstate forward-only methods** (Adam memorizes
+  4K tokens in <2s); all comparisons here use fresh minibatches + held-out
+  evaluation.
+- **80% of int4 peak is blocked on toolchain** (no async-copy/DSMEM/TMA on
+  gfx1201/hipRTC) — parked, with the sparse 2:4 path (1138 TOPS) recorded as
+  the future avenue.
