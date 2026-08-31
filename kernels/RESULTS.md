@@ -1311,3 +1311,35 @@ serialization. Status of the overlap family:
     M-stacking (avoids the memory work per useful FLOP — already the
     design); (4) batched optimizer passes (one Adam sweep per K updates).
 Caveat: Windows-ROCm/hipRTC behavior measured; other runtimes may differ.
+
+## OVERLAP SURVIVORS: all four tested (kernels/overlap_survivors.py) — ALL VALIDATED
+TEST 1 — lane stacking ((1+P)-lane mechanism), v4 TFLOPS vs M (N=2048, K=4096):
+  M=2048: 76.7-79.9 | 4096: 89.7-93.6 | 8192: 96.9-97.3 | 16384: 97.1-108.1
+  | 32768: 97.4-98.9 | 65536: 97.9-102.5  (two runs)
+  -> +27-35% from M=2K to a ~100 TFLOPS plateau (reached by M>=8-16K),
+  then flat: tangent lanes past ~16K rows are marginal-cost-free. The
+  (1+P)-lane stacking claim holds, saturated.
+TEST 2 — batched passes: one 17-rep sweep 25.4-25.7 ms vs 17 launches
+  28.0-28.6 ms -> 8-11% launch overhead saved.
+TEST 3 — epilogue fusion: int8 quantize fused into the GEMM epilogue
+  2.76-2.78 ms vs GEMM + separate quant kernel 3.30-3.33 ms = 1.20x,
+  outputs BITWISE IDENTICAL (saves the fp32-read + int8-write round trip).
+TEST 4 — megakernel CTA-roles: ONE launch, persistent-GEMM CTAs + memory
+  CTAs, role by blockIdx. GEMM role verified EXACT (bitwise = v4 over all
+  8.4M outputs; the first spot-check 'failure' was a reference bug — the
+  missing 1/128 epilogue scale, not a kernel bug).
+  split 160g+56m : gemm 5.5 + mem 46.1 -> BOTH 46.3 ms (GEMM 96% hidden)
+  split 112g+112m: gemm 7.5 + mem 28.1 -> BOTH 28.4 ms (GEMM 96% hidden)
+  -> IN-KERNEL CO-RESIDENCY OVERLAP WORKS: the stream-serialization
+  verdict applies only ACROSS launches — inside one kernel, CTA roles
+  share the machine and the memory-bound phase absorbs the compute phase
+  at ~96% efficiency. The one overlap path on this platform is confirmed.
+  Production caveats: persistent tile stride needs locality-aware
+  scheduling (naive stride-160 map runs the GEMM role ~2x slower than the
+  2D-grid raster, 5.5 vs 2.5-2.8 ms — contiguous tile slabs per CTA fix
+  it); the memory role needs ~112 CTAs x 128 threads to approach
+  bandwidth saturation (56 CTAs reaches ~half).
+FORWARD DESIGN (the four compose into one kernel per training step):
+  the (1+P)-lane persistent megakernel — lane-stacked GEMM tiles + fused
+  quant epilogue + CTA-role-specialized memory work + batched optimizer
+  passes. No dispatcher dependency, no streams, everything in-kernel.
