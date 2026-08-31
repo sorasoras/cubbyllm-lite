@@ -60,14 +60,19 @@ cubbylite/           the training stack
 kernels/             the int4 WMMA kernel campaign
   gemm_v19.py         the 261-TFLOPS champion (256×128 tiles, 16 warps)
   RESULTS.md          the master log — every round, mechanism, and verdict
+scripts/             benchmark launcher
 results/              run logs
 ```
 
 ## Run it
 
 ```bash
-# 4-arm controlled comparison (transformer-Adam vs HRM-Adam vs global-ES vs
-# backprop-free), fresh minibatches + held-out eval, matched wall-clock:
+# the goal-run config (backprop-free final stack vs the Adam variant at its
+# calibrated lr), fresh minibatches + held-out eval, matched wall-clock:
+QGAL_DEVICE=cuda python cubbylite/hrm_eggroll.py final
+
+# the full multi-arm comparison (transformer-Adam, HRM-Adam one-step,
+# global-ES control, backpropless variants):
 QGAL_DEVICE=cuda python cubbylite/hrm_eggroll.py run
 
 # the anchored-hybrid K-curve:
@@ -76,6 +81,11 @@ QGAL_DEVICE=cuda python cubbylite/hybrid_anchor.py sweep
 # the int4 GEMM benchmark (RX 9070 / gfx1201):
 python kernels/gemm_v19.py
 ```
+
+Note: the recorded final numbers (2.20–2.30 vs 2.360) are at ~2000 matched
+updates — run `final` with `HRM_SECONDS=45` for that comparison point;
+`HRM_SECONDS=20` gives the wall-clock-parity table entry (866 updates,
+2.450, vs Adam's 1944 — the Python-dispatch tax at smoke scale).
 
 Dependencies: PyTorch + a ROCm hipRTC runtime (TheRock dist works on
 Windows/gfx1201). The kernel campaign assumes an AMD RDNA4 GPU.

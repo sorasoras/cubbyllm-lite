@@ -616,8 +616,15 @@ if __name__ == '__main__':
     if mode == 'calib':
         for lr in (0.003, 0.01, 0.03):
             arm_A(8, lr=lr)
+    elif mode == 'final':
+        # the goal-run config: exact forward-op-chain gradients, no population,
+        # no reuse, Adam; arm A at its calibrated lr as the matched reference
+        arm_A(SEC, lr=0.003)
+        arm_C2(SEC, head_lr=0.003, cycles=1, pop=0, beta=0.0,
+               guided=True, rule='adam', adam_lr=0.003,
+               name='hrm-bpl-final')
     else:
-        LRA = float(os.environ.get('HRM_LR_A', 0.01))
+        LRA = float(os.environ.get('HRM_LR_A', 0.003))
         arm_D(SEC, lr=LRA)
         arm_A(SEC, lr=LRA)
         arm_B(SEC)
