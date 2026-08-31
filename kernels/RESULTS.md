@@ -1160,3 +1160,45 @@ At smoke scale backprop dominates and the generation phase does not earn
 its wall-clock; the structural prizes (int4-in-loop QAT, no activation
 storage on ~99% of compute, on-chip adaptation) remain untested at
 GEMM-bound scale. Best lead: half-depth anchoring.
+
+## BACKPROP-FREE HRM: the substrate test (cubbylite/hrm_eggroll.py)
+Micro-HRM (L-block x5 steps/cycle, H-block x3 cycles, d=64; post-norm
+parameter-free RMSNorm blocks, truncated LeCun init; one-step gradient path
+head -> final H app -> final L app -> embedding, no BPTT) on the fresh-batch
+held-out protocol, matched 20s wall-clock:
+  D xformer-adam   CE 2.101  (6248 updates)   [plain 2-block transformer]
+  A hrm-adam1s     CE 2.360  (1944 updates)   [HRM + exact one-step grads]
+  B hrm-es-global  CE 5.242  (   18 updates)  [global-ES through full unroll]
+  C hrm-bpl        CE 2.768  (  118 updates)  [BACKPROPFREE: closed-form head
+                                                gradient + short-path (2-app)
+                                                JVP populations, P=32 rank-8]
+  C alpha=0.01     CE 2.805  (  117 updates)  [alpha-insensitive]
+MATCHED-UPDATE marks (the structural number):
+  u30: A 2.841  C 3.129 | u100: A 2.585  C 2.797  -> per-update gap ~0.2 nats.
+  Transformer substrate for contrast: global-ES at ~141 updates was 4.09 vs
+  Adam's ~2.5 -> per-update gap ~1.6 nats.
+FINDINGS:
+1. SUBSTRATE VALIDATED: forward-only training on the HRM one-step structure
+  is STABLE and within ~0.2 nats/update of exact gradients -- the
+  forward-only per-update deficit collapsed ~8x vs the transformer
+  substrate. Mechanism: tangent lanes propagate through 2 applications
+  instead of the full network (B, which pays the full path, is dead:
+  CE 5.24 at 18 updates -- global ES cannot afford recurrent depth at all).
+2. Wall-clock gap (C 0.41 nats behind A) is overhead-bound at smoke scale:
+  118 vs 1944 updates. Each C update = unroll + 32 jvps ~ 170ms of
+  Python/launch overhead, not compute. GEMM-bound estimate: C's update ~
+  unroll + 32x(2 apps + head) vs A's unroll + backward ~ 8-10x.
+3. POST-NORM IS LOAD-BEARING for weight-shared recurrence (measured:
+  unnormalized blocks explode at all lrs; prenorm explodes at lr>=0.003
+  (residual stream grows linearly over 15 apps); post-norm stable
+  0.003-0.03). The paper's Post-Norm + LeCun recipe independently confirmed.
+4. HRM one-step Adam is 0.26 behind the plain transformer at this scale
+  (2.36 vs 2.10; per-update competitive: 2.585 vs 2.534 at u100) --
+  recurrence pays on depth-demanding tasks, not tiny LM smoke.
+VERDICT: the backprop-free HRM stack trains. Closed-form head gradient +
+short-path JVP populations on the one-step substrate recover most of what
+exact gradients deliver per update. Remaining gaps: (a) rank-limited module
+estimates (~0.2 nats/update -- target for Q-GaLore factors on short paths
+and the local convergence/contrast losses), (b) step-rate overhead
+(implementation cost, killed by a batched-lane kernel). Direction for the
+backprop-free LLM: HRM-class substrate + these signals, not the transformer.
