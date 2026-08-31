@@ -22,7 +22,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.func import functional_call, jvp
+from torch.func import functional_call, jvp, vmap
 
 from qgalore_eggroll import LM, Block, make_loss, DEV
 from hybrid_anchor import train_pool, eval_windows, V, d, ffn, ctx
@@ -68,6 +68,11 @@ class HRM(nn.Module):
         self.L = HRMBlock(d, ffn)
         self.H = HRMBlock(d, ffn)
         self.head = nn.Linear(d, V, bias=False)
+        # per-cycle aux readout heads: deep supervision without corrupting
+        # the final head (a shared head trained on mid-computation states
+        # blows up the final readout — measured)
+        self.aux = nn.ModuleList([nn.Linear(d, V, bias=False)
+                                  for _ in range(nH - 1)])
         self.nL, self.nH = nL, nH
         g = torch.Generator().manual_seed(7)
         self.register_buffer('h0', torch.randn(1, T, d, generator=g) * 0.1)
@@ -187,7 +192,8 @@ class EsHrm:
                  head_lr=0.01, seed=0):
         self.model, self.mode, self.pop, self.alpha, self.r = model, mode, pop, alpha, rank
         named = dict(model.named_parameters())
-        self.keys = ([k for k in named if not k.startswith('head.')]
+        self.keys = ([k for k in named if not k.startswith('head.')
+                      and not k.startswith('aux.')]
                      if mode == 'short' else list(named))
         self.base = {k: named[k].detach().clone() for k in self.keys}
         self.model_params = named
@@ -254,6 +260,124 @@ class EsHrm:
         return float(dst.mean())
 
 
+class BplHrm2:
+    """Refined backpropless stack (arm C2). Three refinements over C:
+    1. per-cycle deep supervision — head readout at EVERY H-update, so each
+       unroll yields nH short-path populations (3x96 directional
+       measurements/update) instead of one;
+    2. vmap-batched populations — one batched jvp instead of 32 Python calls
+       (the measured step-rate killer: 118 vs 1944 updates in 20s);
+    3. momentum (0.9) on the reconstruction — the power-iteration ingredient
+       that mattered most in the Q-GaLore fix.
+    Head still trained by the exact closed-form gradient, summed over cycles."""
+
+    def __init__(self, model, pop=32, alpha=0.004, rank=8, head_lr=0.003,
+                 cycles=3, beta=0.9, seed=0):
+        self.model, self.pop, self.alpha, self.r = model, pop, alpha, rank
+        self.cycles, self.beta = cycles, beta
+        named = dict(model.named_parameters())
+        self.keys = [k for k in named
+                     if not k.startswith('head.') and not k.startswith('aux.')]
+        self.base = {k: named[k].detach().clone() for k in self.keys}
+        self.model_params = named
+        self.head_opt = torch.optim.Adam(
+            [named['head.weight']] + [p for k, p in named.items()
+                                      if k.startswith('aux.')], lr=head_lr)
+        self.g = torch.Generator(device=DEV).manual_seed(seed)
+        self.mom = None
+        self.ce_ema = {}          # per-cycle CE EMA — gates aux supervision
+
+    def _head_for(self, c):
+        m = self.model
+        return m.aux[c] if c < m.nH - 1 else m.head
+
+    def _tangent_batch(self, k):
+        s = self.base[k].shape
+        P = self.pop
+        if len(s) < 2:
+            return torch.randn((P, *s), generator=self.g, device=DEV)
+        r = min(self.r, min(s))
+        u = torch.randn((P, s[0], r), generator=self.g, device=DEV)
+        v = torch.randn((P, r, s[1]), generator=self.g, device=DEV)
+        return torch.bmm(u, v) / math.sqrt(r)
+
+    def _cycle_loss(self, p, x, consts, tgt, c):
+        z_prev, h_prev = consts
+        m = self.model
+        uu = functional_call(m.emb, pref(p, 'emb.'), (x,))
+        z_star = functional_call(m.L, pref(p, 'L.'), (z_prev + h_prev + uu,))
+        h_star = functional_call(m.H, pref(p, 'H.'), (h_prev + z_star + uu,))
+        return F.cross_entropy(self._head_for(c)(h_star).reshape(-1, V),
+                               tgt.reshape(-1))
+
+    def step(self, x, tgt, gen):
+        m = self.model
+        with torch.no_grad():                      # shared unroll + per-cycle constants
+            u = m.emb(x)
+            h, z = m.h0, m.z0
+            consts, hs = [], []
+            for c in range(m.nH):
+                for t in range(m.nL):
+                    if t == m.nL - 1:
+                        zc = z
+                    z = m.L(z + h + u)
+                consts.append((zc, h))
+                h = m.H(h + z + u)
+                hs.append(h)
+        # gate aux cycles on their own learnability: early-cycle readouts at
+        # unorganized states produce noise gradients at full standardized
+        # step magnitude (measured: blows up to ~5.5), so a cycle joins the
+        # module population only once its head has learned to read it
+        # (CE meaningfully below the random baseline ln V = 5.545).
+        with torch.no_grad():
+            onehot = F.one_hot(tgt, V).float()
+            for c in range(m.nH - self.cycles, m.nH):
+                p_c = self._head_for(c)(hs[c])
+                ce_c = float(F.cross_entropy(p_c.reshape(-1, V), tgt.reshape(-1)))
+                self.ce_ema[c] = 0.9 * self.ce_ema.get(c, ce_c) + 0.1 * ce_c
+        last = m.nH - 1
+        cyc = [c for c in range(m.nH - self.cycles, m.nH)
+               if c == last or self.ce_ema[c] < 5.0]
+        params = dict(self.base)
+        acc = {k: torch.zeros_like(self.base[k]) for k in self.keys}
+
+        def dval(t, cc):
+            _, dv = jvp(lambda p: self._cycle_loss(p, x, consts[cc], tgt, cc),
+                        (params,), (t,))
+            return dv
+
+        for c in cyc:
+            T = {k: self._tangent_batch(k) for k in self.keys}
+            try:
+                ds = vmap(lambda t: dval(t, c))(T)
+            except Exception:
+                ds = torch.stack([dval({k: T[k][i] for k in T}, c)
+                                  for i in range(self.pop)])
+            for k in self.keys:
+                acc[k] -= torch.einsum('i,i...->...', ds, T[k]) / self.pop
+        if self.mom is None:
+            self.mom = {k: torch.zeros_like(self.base[k]) for k in self.keys}
+        alpha_t = self.alpha * 150.0 / (gen + 150.0)
+        with torch.no_grad():
+            for k in self.keys:
+                self.mom[k] = self.beta * self.mom[k] + (1 - self.beta) * acc[k]
+                a = self.mom[k]
+                a = (a - a.mean()) / (a.std() + 1e-8)
+                self.base[k] += alpha_t * a
+                self.model_params[k].data.copy_(self.base[k])
+        with torch.no_grad():                      # exact per-cycle head gradients
+            onehot = F.one_hot(tgt, V).float()
+            for c in range(m.nH - self.cycles, m.nH):   # all cycles: heads
+                h_c = hs[c]                              # always train (the gate
+                p_c = self._head_for(c)(h_c).softmax(-1) # only gates populations)
+                diff = (p_c - onehot).reshape(-1, V)
+                head_c = self._head_for(c)
+                head_c.weight.grad = (diff.T @ h_c.reshape(-1, h_c.shape[-1])
+                                      / diff.shape[0])
+            self.head_opt.step()
+            self.head_opt.zero_grad()
+
+
 def arm_B(seconds, alpha=0.004):
     torch.manual_seed(0)
     model = HRM().to(DEV)
@@ -280,6 +404,21 @@ def arm_C(seconds, alpha=0.004, head_lr=0.01):
     run_loop('hrm-bpl', seconds, step, lambda: heldout_hrm(model))
 
 
+def arm_C2(seconds, alpha=0.004, head_lr=0.003, cycles=3, pop=32,
+           beta=0.9, name='hrm-bpl2'):
+    torch.manual_seed(0)
+    model = HRM().to(DEV)
+    tr = BplHrm2(model, alpha=alpha, head_lr=head_lr, cycles=cycles,
+                 pop=pop, beta=beta)
+    pi = [0]
+
+    def step(upd):
+        idx, tgt = train_pool[pi[0] & 255]; pi[0] += 1
+        tr.step(idx, tgt, upd[0]); upd[0] += 1
+
+    run_loop(name, seconds, step, lambda: heldout_hrm(model))
+
+
 if __name__ == '__main__':
     mode = sys.argv[1] if len(sys.argv) > 1 else 'run'
     SEC = float(os.environ.get('HRM_SECONDS', 20))
@@ -293,3 +432,5 @@ if __name__ == '__main__':
         arm_B(SEC)
         arm_C(SEC, head_lr=LRA)
         arm_C(SEC, alpha=0.01, head_lr=LRA)
+        arm_C2(SEC, head_lr=LRA)                                   # refined
+        arm_C2(SEC, head_lr=LRA, cycles=1, name='hrm-bpl2 c1')     # ablation

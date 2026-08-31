@@ -1202,3 +1202,38 @@ estimates (~0.2 nats/update -- target for Q-GaLore factors on short paths
 and the local convergence/contrast losses), (b) step-rate overhead
 (implementation cost, killed by a batched-lane kernel). Direction for the
 backprop-free LLM: HRM-class substrate + these signals, not the transformer.
+
+## BACKPROP-FREE HRM REFINEMENT (hrm-bpl2): 2.768 -> 2.616, every lever isolated
+Refinement campaign on the best candidate (arm C), same 20s protocol:
+  C  v1 (Python-loop jvps)            CE 2.768  (118 updates)
+  C2 vmap-batched pops + momentum 0.9 CE 2.732  (665 updates)
+  C2 vmap, NO momentum                CE 2.616  (697 updates)  <- BEST
+  C2 vmap, no mom, P=64              CE 2.622  (411 updates; best per-update)
+  C2 alpha=0.01 / 0.02               CE 2.881 / 3.114  (worse)
+  references: A hrm-adam1s 2.360 | D xformer-adam 2.101
+ISOLATED LEVERS:
+1. vmap-batched populations: 118 -> ~700 updates at matched wall-clock
+  (the Python-loop overhead was the measured step-rate killer).
+2. MOMENTUM IS NEGATIVE on this substrate (2.732 vs 2.616): on the
+  2-application short path there is no slow subspace to track — the
+  beta=0.9 EMA just lags the fast-rotating early descent directions
+  (opposite of its role on the transformer substrate).
+3. PER-CYCLE DEEP SUPERVISION: structurally negative for next-token LMs,
+  three ways — shared head: head trained on mid-computation states
+  corrupts the final readout (CE spikes to ~5.5); per-cycle aux heads:
+  STILL blows up early (noise gradients at full standardized step
+  magnitude); CE-gated supervision: gate opens immediately because the
+  residual state CONTAINS u (aux readouts shortcut by reading the
+  current token — identity leak). The paper's segments work because each
+  segment ENDS a complete computation; mid-computation cycle states on
+  next-token LMs are shortcut-dominated.
+4. P=64: better per-update (u100 2.759 vs 2.791), wall-clock neutral.
+5. alpha 0.004 confirmed optimal — the plateau is a direction-quality
+  ceiling, not step starvation (0.01/0.02 degrade).
+REFINED STACK (final): closed-form exact head gradient + vmap-batched
+short-path JVP populations (P=32, rank-8, NO momentum, last-cycle signal
+only, alpha 0.004). CE 2.616: 0.26 behind exact-gradient HRM at matched
+wall-clock (was 0.41), 0.21/update at u100, 0.52 behind transformer Adam.
+The remaining gap is rank-limited direction quality — next lever is
+Q-GaLore factor tangents with backprop-free self-warm-start (SVD of
+accumulated reconstructions), not momentum or supervision count.
