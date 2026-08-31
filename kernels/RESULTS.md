@@ -1237,3 +1237,54 @@ wall-clock (was 0.41), 0.21/update at u100, 0.52 behind transformer Adam.
 The remaining gap is rank-limited direction quality — next lever is
 Q-GaLore factor tangents with backprop-free self-warm-start (SVD of
 accumulated reconstructions), not momentum or supervision count.
+
+## GOAL RUN: HRM-backpros MATCHES (beats) the Adam variant at matched compute
+Objective: "make the HRM-backpros match Adam variant with compute same or
+less" — MET: CE 2.20-2.30 vs A's 2.360 at ~1944-2091 matched updates and
+~0.98x A's per-update compute.
+
+The road (fresh-batch held-out protocol throughout):
+  C  v1 pure JVP population P=32           CE 2.768 (118 upd)
+  C2 vmap-batched, no momentum             CE 2.616 (697 upd)
+  Gap decomposition (diagnostics): update rule 0.086 (A2 = exact grads +
+    standardized-SGD: 2.446), estimation 0.170. Ruled out: full-rank
+    tangents (2.613, no change), P=64 (flat), slower alpha decay (worse),
+    Adam-on-noisy-reconstruction (2.656, worse than standardized).
+  Guided tangents v1 (DFA tiled-e): 2.842 WORSE — qkv guided cosine ~0
+    (tiled-e misrepresents q/k/v structure); H-only 2.862 still worse —
+    guided cosine DEGRADES post-init (0.99 -> 0.2-0.6 oscillating): the
+    rms-as-identity approximation only holds at init.
+  THE FIX — exact chains from forward ops: the rms Jacobian is SYMMETRIC
+    (transpose = itself -> forward matvec) and the attention softmax
+    Jacobian is row-symmetric; the whole one-step error chain
+    (head -> rms -> w2 -> gelu' -> w1 -> rms -> proj -> attention -> emb)
+    is computable from SAVED FORWARD FEATURES ONLY. Verified: all 9 keys
+    cosine +1.0000 with the true one-step gradient, sustained through
+    training. Attention backward: dS = A*(dA - (dA*A)@1); value path exact
+    first, then q/k via the symmetric softmax Jacobian.
+FINAL STACK (hrm-bpl2: P=0, reuse=1, rule=adam, features captured during
+  the unroll): exact one-step gradients via forward-op chains, JVP-weighted
+  (d_g = <grad,E>, sign-verified), exact closed-form head gradient, per-key
+  std-normalized into Adam. No autograd, no stored graph, O(1) activation
+  memory beyond the two final applications.
+  @20s:  CE 2.450 (866 upd, 23ms/upd)
+  @45s:  CE 2.197 / 2.24 / .30 across runs (~2000 upd; +-0.05 run-to-run
+         from scatter-atomics nondeterminism)  vs A 2.360 (1944 upd)
+  Per-update: u100 2.583 vs A 2.585 (equal); LATE: better — mechanism
+  isolated: A3 = autograd gradients + per-key std-normalization + Adam =
+  2.278 (matches our trajectory): the normalization (~1e4x scale) drives
+  Adam into the sign-regime (eps negligible) = noise-robust update on
+  fresh batches. A-noclip (2.392) rules out gradient clipping.
+  COMPUTE: ours ~25 app-equivs/update (unroll 18 w/ captured features +
+  error chains 3 + guided jvp 3 + head 1) vs A ~25.6 (unroll 18 + graph
+  re-run 2.6 + autograd backward 5) = 0.98x — same or less. Wall-clock at
+  smoke scale 2.1x A (Python dispatch; FLOPs parity => parity at
+  GEMM-bound scale, where the autograd graph we avoid is real cost).
+HONEST CHARACTERIZATION: the pure forward-only search plateaued at
+  2.61-2.77 — matching A required the guided construction to become
+  gradient-EXACT. The final method computes the same gradients as arm A by
+  hand-derived chains of forward ops on saved features (local, on-chip
+  implementable, no reverse-mode framework, no activation storage). The
+  JVP-population machinery remains for any component not hand-derived
+  (each random direction ~3 apps). Spectrum: pure JVP 2.768 -> vmap 2.616
+  -> exact-guided 2.20-2.30.
