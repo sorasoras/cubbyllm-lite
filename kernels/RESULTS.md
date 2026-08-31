@@ -1343,3 +1343,37 @@ FORWARD DESIGN (the four compose into one kernel per training step):
   the (1+P)-lane persistent megakernel — lane-stacked GEMM tiles + fused
   quant epilogue + CTA-role-specialized memory work + batched optimizer
   passes. No dispatcher dependency, no streams, everything in-kernel.
+
+## THE ASSEMBLED MEGAKERNEL (kernels/train_megak.py): all four in ONE launch — 1.39x
+Config: 32 lanes x 2048 rows (1 primal + 31 tangents, M=65536) x N=2048 x
+K=4096 int4 GEMM with FUSED int8 epilogue + Adam-style update sweep
+(3.2 GB traffic) on the previous phase's weight buffers. Baseline = 3
+serial launches (v4 fp32 GEMM + quant8 kernel + adam kernel): 20.6-21.2 ms.
+Correctness at every step: int8 output BITWISE identical to the baseline
+pipeline; Adam matches the torch reference (atol 1e-5).
+
+THE ASSEMBLY LADDER (each step's lesson):
+V1 persistent CTA-roles (G gemm CTAs + X memory CTAs, one launch):
+  160g+56m 0.77x / 392g+168m 0.98x — the persistent GEMM runs 1.3-2.3x
+  slower than the raster (needs ~6-7 CTAs/CU of latency hiding; LDS caps
+  residency at ~32KB/CU = 6-7 x 4.6KB), and at full occupancy the memory
+  CTAs cannot get resident -> overlap collapses to 1-8%. The two roles
+  compete for the same residency budget in persistent form.
+V2 raster + memory blocks appended at the END of the grid: 1.12-1.15x —
+  the gain is ENTIRELY the epilogue fusion (raster GEMM 99.3-105.0
+  TFLOPS with fused int8 vs fp32-write + separate quant); the end-of-grid
+  memory blocks dispatch last and run serially (-1% hidden).
+V3 raster + memory blocks FIRST in the grid: **1.39x** (112 memory blocks):
+  BOTH 14.61 ms vs baseline 20.64. The memory blocks dispatch at kernel
+  start, SQUAT their CTA/LDS slots for the whole launch, and the GEMM
+  raster churns through the remaining slots behind them — adam 46%
+  hidden; GEMM degrades 10.5 -> 14.6 ms from slot competition, net win
+  6.0 ms. Splits: 112m 1.39x | 168m 1.34x | 336m 1.13x (too many
+  squatters evict too much GEMM concurrency).
+DESIGN LAW (the platform's overlap recipe): on gfx1201, in-kernel overlap
+= memory-role blocks placed FIRST in a raster grid (slot squatting), NOT
+persistent CTA roles (under-provisions latency hiding) and NOT streams
+(serialize). The winning single-launch training kernel = lane-stacked
+int4 GEMM (tangents ride the ~100-105 TFLOPS plateau) + fused int8
+epilogue (deployment format) + leading memory blocks (optimizer/quant
+work of the previous phase, ping-pong buffers). 
